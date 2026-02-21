@@ -352,7 +352,10 @@ class StartCommand extends Command
             exit(self::FAILURE);
         }
 
-        return "# GitHub Issue #{$issueNumber}: {$issue['title']}\n\n{$issue['body']}";
+        return "# GitHub Issue #{$issueNumber}: {$issue['title']}\n\n{$issue['body']}"
+            ."\n\n---\n\nAfter completing each checklist item, update the GitHub issue to check it off."
+            ." Fetch the current body with `gh issue view {$issueNumber} --json body -q .body`,"
+            .' then `gh issue edit '.$issueNumber." --body '...'` with the checkbox toggled from `- [ ]` to `- [x]`.";
     }
 
     /**

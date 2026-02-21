@@ -10,6 +10,7 @@ use Symfony\Component\Process\Process as SymfonyProcess;
 use Woda\Ralph\ScreenManager;
 use Woda\Ralph\SessionTracker;
 
+use function Laravel\Prompts\search;
 use function Laravel\Prompts\select;
 use function Laravel\Prompts\text;
 use function Laravel\Prompts\textarea;
@@ -42,9 +43,18 @@ class StartCommand extends Command
             return self::FAILURE;
         }
 
-        $name = $this->resolveName();
+        $this->checkSandboxConfig();
+
+        // Resolve what to work on first (determines suggested name)
+        $promptSource = $this->resolvePromptSource();
+
+        // Name: explicit arg > suggested from prompt source > interactive
+        $name = $this->resolveName($promptSource['suggested_name']);
+
+        // Write prompt file if needed, or use existing file
+        $prompt = $promptSource['file'] ?? $this->writePromptFile($name, $promptSource['content']);
+
         $sessionId = $this->resolveSessionId($tracker, $name);
-        $prompt = $this->resolvePrompt($name);
 
         /** @var int $iterations */
         $iterations = $this->option('iterations') ?? config('ralph.loop.default_iterations');
@@ -93,7 +103,7 @@ class StartCommand extends Command
 
         $tracker->track($name, [
             'name' => $name,
-            'prompt_source' => $this->describePromptSource(),
+            'prompt_source' => $promptSource['source'],
             'working_path' => $workingDir,
             'session_id' => $sessionId,
             'model' => $model,
@@ -118,7 +128,7 @@ class StartCommand extends Command
         return self::SUCCESS;
     }
 
-    private function resolveName(): string
+    private function resolveName(?string $suggestedName): string
     {
         $name = $this->argument('name');
 
@@ -126,10 +136,8 @@ class StartCommand extends Command
             return $this->validateName($name);
         }
 
-        // Auto-derive from --issue
-        $issue = $this->option('issue');
-        if (is_string($issue) && $issue !== '') {
-            return $this->validateName("issue-{$issue}");
+        if (is_string($suggestedName) && $suggestedName !== '') {
+            return $this->validateName($suggestedName);
         }
 
         $name = text(
@@ -172,61 +180,53 @@ class StartCommand extends Command
         return (string) Str::uuid();
     }
 
-    private function resolvePrompt(string $name): string
+    /**
+     * @return array{content: string, suggested_name: ?string, source: string, file: ?string}
+     */
+    private function resolvePromptSource(): array
     {
         // 1. Explicit --issue flag
         $issue = $this->option('issue');
         if (is_string($issue) && $issue !== '') {
-            return $this->resolveIssuePrompt($issue, $name);
+            return [
+                'content' => $this->fetchIssuePromptContent($issue),
+                'suggested_name' => $issue,
+                'source' => "issue#{$issue}",
+                'file' => null,
+            ];
         }
 
         // 2. Explicit --prompt flag
         $prompt = $this->option('prompt');
         if (is_string($prompt) && $prompt !== '') {
-            return $this->resolveExplicitPrompt($prompt, $name);
+            if (File::exists($prompt)) {
+                return [
+                    'content' => '',
+                    'suggested_name' => null,
+                    'source' => $prompt,
+                    'file' => $prompt,
+                ];
+            }
+
+            return [
+                'content' => $prompt,
+                'suggested_name' => null,
+                'source' => 'prompt',
+                'file' => null,
+            ];
         }
 
-        // 3. Interactive mode — two-step drill-down
-        return $this->resolveInteractivePrompt($name);
+        // 3. Interactive mode
+        $interactive = $this->resolveInteractivePromptSource();
+        $interactive['file'] = null;
+
+        return $interactive;
     }
 
-    private function resolveIssuePrompt(string $issueNumber, string $name): string
-    {
-        $this->components->info("Fetching issue #{$issueNumber}...");
-
-        $result = Process::run(
-            sprintf('gh issue view %s --json title,body', escapeshellarg($issueNumber)),
-        );
-
-        if (! $result->successful()) {
-            $this->components->error("Failed to fetch issue #{$issueNumber}: {$result->errorOutput()}");
-            exit(self::FAILURE);
-        }
-
-        /** @var array<string, mixed>|null $issue */
-        $issue = json_decode($result->output(), true);
-
-        if (! is_array($issue) || ! array_key_exists('title', $issue) || ! array_key_exists('body', $issue)
-            || ! is_string($issue['title']) || ! is_string($issue['body'])) {
-            $this->components->error("Invalid issue data for #{$issueNumber}.");
-            exit(self::FAILURE);
-        }
-
-        $promptContent = "# GitHub Issue #{$issueNumber}: {$issue['title']}\n\n{$issue['body']}";
-
-        return $this->writePromptFile($name, $promptContent);
-    }
-
-    private function resolveExplicitPrompt(string $prompt, string $name): string
-    {
-        if (File::exists($prompt)) {
-            return $prompt;
-        }
-
-        return $this->writePromptFile($name, $prompt);
-    }
-
-    private function resolveInteractivePrompt(string $name): string
+    /**
+     * @return array{content: string, suggested_name: ?string, source: string}
+     */
+    private function resolveInteractivePromptSource(): array
     {
         $options = [];
 
@@ -250,7 +250,7 @@ class StartCommand extends Command
 
         // If only manual is available, skip the selection
         if (count($options) === 1) {
-            return $this->resolveManualPrompt($name);
+            return $this->resolveManualPromptSource();
         }
 
         $source = select(
@@ -259,13 +259,60 @@ class StartCommand extends Command
         );
 
         return match ($source) {
-            'issue' => $this->resolveInteractiveIssue($name),
-            'prd' => $this->resolveInteractivePrd($name, $prdPath, $prds),
-            default => $this->resolveManualPrompt($name),
+            'issue' => $this->resolveInteractiveIssueSource(),
+            'prd' => $this->resolveInteractivePrdSource($prdPath, $prds),
+            default => $this->resolveManualPromptSource(),
         };
     }
 
-    private function resolveInteractiveIssue(string $name): string
+    /**
+     * @return array{content: string, suggested_name: string, source: string}
+     */
+    private function resolveInteractiveIssueSource(): array
+    {
+        $result = Process::run('gh issue list --state open --limit 100 --json number,title');
+
+        if (! $result->successful()) {
+            return $this->resolveManualIssueSource();
+        }
+
+        /** @var list<array{number: int, title: string}>|null $issues */
+        $issues = json_decode($result->output(), true);
+
+        if (! is_array($issues) || $issues === []) {
+            $this->components->warn('No open issues found.');
+
+            return $this->resolveManualIssueSource();
+        }
+
+        $options = [];
+        foreach ($issues as $issue) {
+            $options[$issue['number']] = "#{$issue['number']} {$issue['title']}";
+        }
+
+        $issueNumber = search(
+            label: 'Search for an issue',
+            options: fn (string $value) => array_filter(
+                $options,
+                fn (string $label) => $value === '' || str_contains(Str::lower($label), Str::lower($value)),
+            ),
+            placeholder: 'Type to filter...',
+            scroll: 10,
+        );
+
+        $issueNumber = (string) $issueNumber;
+
+        return [
+            'content' => $this->fetchIssuePromptContent($issueNumber),
+            'suggested_name' => $issueNumber,
+            'source' => "issue#{$issueNumber}",
+        ];
+    }
+
+    /**
+     * @return array{content: string, suggested_name: string, source: string}
+     */
+    private function resolveManualIssueSource(): array
     {
         $issueNumber = text(
             label: 'Issue number',
@@ -275,13 +322,43 @@ class StartCommand extends Command
                 : 'Must be a number.',
         );
 
-        return $this->resolveIssuePrompt($issueNumber, $name);
+        return [
+            'content' => $this->fetchIssuePromptContent($issueNumber),
+            'suggested_name' => $issueNumber,
+            'source' => "issue#{$issueNumber}",
+        ];
+    }
+
+    private function fetchIssuePromptContent(string $issueNumber): string
+    {
+        $this->components->info("Fetching issue #{$issueNumber}...");
+
+        $result = Process::run(
+            sprintf('gh issue view %s --json title,body', escapeshellarg($issueNumber)),
+        );
+
+        if (! $result->successful()) {
+            $this->components->error("Failed to fetch issue #{$issueNumber}: {$result->errorOutput()}");
+            exit(self::FAILURE);
+        }
+
+        /** @var array<string, mixed>|null $issue */
+        $issue = json_decode($result->output(), true);
+
+        if (! is_array($issue) || ! array_key_exists('title', $issue) || ! array_key_exists('body', $issue)
+            || ! is_string($issue['title']) || ! is_string($issue['body'])) {
+            $this->components->error("Invalid issue data for #{$issueNumber}.");
+            exit(self::FAILURE);
+        }
+
+        return "# GitHub Issue #{$issueNumber}: {$issue['title']}\n\n{$issue['body']}";
     }
 
     /**
      * @param  array<string, string>  $prds
+     * @return array{content: string, suggested_name: string, source: string}
      */
-    private function resolveInteractivePrd(string $name, string $prdPath, array $prds): string
+    private function resolveInteractivePrdSource(string $prdPath, array $prds): array
     {
         $selected = select(
             label: 'Select a PRD',
@@ -291,22 +368,33 @@ class StartCommand extends Command
         $projectMd = $prdPath.'/'.$selected.'/project.md';
         $progressMd = $prdPath.'/'.$selected.'/progress.md';
 
-        $promptContent = "@{$projectMd}";
+        $content = "@{$projectMd}";
         if (File::exists($progressMd)) {
-            $promptContent .= "\n\n@{$progressMd}";
+            $content .= "\n\n@{$progressMd}";
         }
 
-        return $this->writePromptFile($name, $promptContent);
+        return [
+            'content' => $content,
+            'suggested_name' => (string) $selected,
+            'source' => "prd:{$selected}",
+        ];
     }
 
-    private function resolveManualPrompt(string $name): string
+    /**
+     * @return array{content: string, suggested_name: null, source: string}
+     */
+    private function resolveManualPromptSource(): array
     {
         $promptText = textarea(
             label: 'Enter your prompt',
             required: true,
         );
 
-        return $this->writePromptFile($name, $promptText);
+        return [
+            'content' => $promptText,
+            'suggested_name' => null,
+            'source' => 'manual',
+        ];
     }
 
     /**
@@ -415,15 +503,31 @@ class StartCommand extends Command
         return implode(' && ', $exports);
     }
 
-    private function describePromptSource(): string
+    private function checkSandboxConfig(): void
     {
-        if (is_string($this->option('issue')) && $this->option('issue') !== '') {
-            return "issue#{$this->option('issue')}";
+        $settingsPath = base_path('.claude/settings.json');
+
+        if (! File::exists($settingsPath)) {
+            $this->components->warn('No .claude/settings.json found. Run `php artisan ralph:init` to configure sandbox permissions.');
+
+            return;
         }
 
-        $prompt = $this->option('prompt');
+        /** @var array<string, mixed>|null $settings */
+        $settings = json_decode(File::get($settingsPath), true);
 
-        return is_string($prompt) && $prompt !== '' ? $prompt : 'interactive';
+        if (! is_array($settings)) {
+            return;
+        }
+
+        /** @var array<string, mixed> $sandbox */
+        $sandbox = $settings['sandbox'] ?? [];
+        $sandboxEnabled = $sandbox['enabled'] ?? false;
+        $autoAllow = $sandbox['autoAllowBashIfSandboxed'] ?? false;
+
+        if (! $sandboxEnabled || ! $autoAllow) {
+            $this->components->warn('Sandbox not fully configured. Run `php artisan ralph:init` to fix. Without this, Claude may hang waiting for Bash approval.');
+        }
     }
 
     private function validateEnvironment(): bool

@@ -175,7 +175,7 @@ function truncate(str, maxLen) {
 function runClaude(claudeArgs, logger) {
   return new Promise((resolve, reject) => {
     const proc = spawn("claude", claudeArgs, {
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["inherit", "pipe", "pipe"],
       env: { ...process.env },
     });
 

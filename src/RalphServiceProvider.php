@@ -5,6 +5,7 @@ namespace Woda\Ralph;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\ServiceProvider;
 use Woda\Ralph\Commands\AttachCommand;
+use Woda\Ralph\Commands\InitCommand;
 use Woda\Ralph\Commands\KillCommand;
 use Woda\Ralph\Commands\StartCommand;
 use Woda\Ralph\Commands\StatusCommand;
@@ -43,6 +44,7 @@ class RalphServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
+                InitCommand::class,
                 StartCommand::class,
                 StatusCommand::class,
                 AttachCommand::class,

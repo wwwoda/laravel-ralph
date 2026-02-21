@@ -174,9 +174,14 @@ function truncate(str, maxLen) {
 
 function runClaude(claudeArgs, logger) {
   return new Promise((resolve, reject) => {
+    // Remove CLAUDECODE to prevent "nested session" detection when Ralph
+    // is started from within a Claude Code terminal
+    const env = { ...process.env };
+    delete env.CLAUDECODE;
+
     const proc = spawn("claude", claudeArgs, {
       stdio: ["inherit", "pipe", "pipe"],
-      env: { ...process.env },
+      env,
     });
 
     let output = "";

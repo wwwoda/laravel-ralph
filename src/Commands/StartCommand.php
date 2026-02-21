@@ -65,7 +65,7 @@ class StartCommand extends Command
         // Build the ralph-loop command
         /** @var string|null $configScriptPath */
         $configScriptPath = config('ralph.script_path');
-        $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.js';
+        $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
         $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId);
 
         // Foreground (--once) mode
@@ -95,7 +95,8 @@ class StartCommand extends Command
         $this->components->info("Starting ralph session '{$name}'...");
 
         $envExports = $this->buildEnvExportString();
-        $screenCmd = "{$envExports} cd {$workingDir} && {$loopCmd}";
+        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$workingDir}", $loopCmd]);
+        $screenCmd = implode(' && ', $parts);
 
         $screenManager->start($name, $screenCmd, $workingDir);
 

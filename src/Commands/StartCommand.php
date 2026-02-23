@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
+use Woda\Ralph\RalphLogger;
 use Woda\Ralph\ScreenManager;
 use Woda\Ralph\SessionTracker;
 
@@ -61,12 +62,24 @@ class StartCommand extends Command
         $iterations = (int) $iterations;
 
         $workingDir = base_path();
+        $model = $this->resolveModel();
+
+        // Create logger and write startup info
+        $logger = $this->createSessionLogger($name);
+        $logger->info("Session: {$name}");
+        $logger->info("Prompt source: {$promptSource['source']}");
+        $logger->info("Session ID: {$sessionId}");
+        $logger->info("Iterations: {$iterations}");
+        $logger->info('Model: '.($model ?? 'default'));
+        $logger->info('Mode: '.($this->option('fresh') ? 'fresh' : 'resume'));
+        $logger->info("Working dir: {$workingDir}");
 
         // Build the ralph-loop command
         /** @var string|null $configScriptPath */
         $configScriptPath = config('ralph.script_path');
         $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
-        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId);
+        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path());
+        $logger->debug("Loop command: {$loopCmd}");
 
         // Foreground (--once) mode
         if ($this->option('once')) {
@@ -99,8 +112,6 @@ class StartCommand extends Command
         $screenCmd = implode(' && ', $parts);
 
         $screenManager->start($name, $screenCmd, $workingDir);
-
-        $model = $this->resolveModel();
 
         $tracker->track($name, [
             'name' => $name,
@@ -443,19 +454,20 @@ class StartCommand extends Command
         return is_string($configModel) && $configModel !== '' ? $configModel : null;
     }
 
-    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId): string
+    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath): string
     {
         /** @var string $permissionMode */
         $permissionMode = config('ralph.loop.permission_mode');
 
         $cmd = sprintf(
-            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --session-id %s',
+            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --session-id %s --log-path %s',
             escapeshellarg($scriptPath),
             escapeshellarg($prompt),
             escapeshellarg($name),
             $iterations,
             escapeshellarg($permissionMode),
             escapeshellarg($sessionId),
+            escapeshellarg($logPath),
         );
 
         $model = $this->resolveModel();
@@ -488,12 +500,18 @@ class StartCommand extends Command
         $marker = config('ralph.loop.completion_marker', '');
         /** @var string $continuation */
         $continuation = config('ralph.prompt.continuation', '');
+        /** @var int $maxFailures */
+        $maxFailures = config('ralph.loop.max_consecutive_failures', 3);
+        /** @var int $nonJsonThreshold */
+        $nonJsonThreshold = config('ralph.logging.non_json_warn_threshold', 50);
 
         return array_filter([
             'AGENT_PROMPT_SUFFIX' => $suffix,
             'AGENT_LOG_DIR' => $logDir,
             'AGENT_COMPLETION_MARKER' => $marker,
             'AGENT_CONTINUATION_PROMPT' => $continuation,
+            'AGENT_MAX_CONSECUTIVE_FAILURES' => (string) $maxFailures,
+            'AGENT_NON_JSON_WARN_THRESHOLD' => (string) $nonJsonThreshold,
         ]);
     }
 
@@ -532,6 +550,16 @@ class StartCommand extends Command
         if (! $sandboxEnabled || ! $autoAllow) {
             $this->components->warn('Sandbox not fully configured. Run `php artisan ralph:init` to fix. Without this, Claude may hang waiting for Bash approval.');
         }
+    }
+
+    private function createSessionLogger(string $name): RalphLogger
+    {
+        /** @var string $logDir */
+        $logDir = config('ralph.logging.directory');
+        $timestamp = now()->format('Y-m-d\TH-i-s');
+        $logPath = "{$logDir}/{$name}/{$timestamp}.log";
+
+        return new RalphLogger($logPath);
     }
 
     private function validateEnvironment(): bool

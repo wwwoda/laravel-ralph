@@ -12,6 +12,7 @@ return [
         'permission_mode' => env('RALPH_PERMISSION_MODE', 'acceptEdits'),
         'model' => env('RALPH_MODEL'),
         'completion_marker' => '<promise>COMPLETE</promise>',
+        'max_consecutive_failures' => (int) env('RALPH_MAX_CONSECUTIVE_FAILURES', 3),
     ],
 
     /*
@@ -56,6 +57,7 @@ return [
 
     'logging' => [
         'directory' => storage_path('ralph-logs'),
+        'non_json_warn_threshold' => 50,
     ],
 
     /*

@@ -3,6 +3,7 @@
 namespace Woda\Ralph;
 
 use Illuminate\Contracts\Foundation\Application;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\ServiceProvider;
 use Woda\Ralph\Commands\AttachCommand;
 use Woda\Ralph\Commands\InitCommand;
@@ -31,10 +32,32 @@ class RalphServiceProvider extends ServiceProvider
             $trackingFile = config('ralph.tracking.file');
 
             return new SessionTracker(
-                trackingFile: base_path($trackingFile),
+                trackingFile: $this->resolveMainWorktreeRoot().'/'.$trackingFile,
                 screenManager: $app->make(ScreenManager::class),
             );
         });
+    }
+
+    /**
+     * Resolve the main worktree root so all worktrees share one tracking file.
+     */
+    private function resolveMainWorktreeRoot(): string
+    {
+        try {
+            $result = Process::path(base_path())->run('git rev-parse --path-format=absolute --git-common-dir');
+
+            if ($result->successful()) {
+                $gitCommonDir = trim($result->output());
+
+                if ($gitCommonDir !== '' && str_starts_with($gitCommonDir, '/')) {
+                    return dirname($gitCommonDir);
+                }
+            }
+        } catch (\Throwable) {
+            // Not in a git repo or git not available
+        }
+
+        return base_path();
     }
 
     public function boot(): void

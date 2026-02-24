@@ -31,15 +31,15 @@ test('ralph:kill --all works when no sessions', function () {
         ->assertExitCode(0);
 });
 
-test('ralph:init creates settings file when none exists', function () {
+test('ralph:init creates settings.json with --shared flag', function () {
     $claudeDir = base_path('.claude');
     $settingsPath = $claudeDir.'/settings.json';
 
     // Ensure clean state
     File::deleteDirectory($claudeDir);
 
-    $this->artisan('ralph:init')
-        ->expectsOutputToContain('Created')
+    $this->artisan('ralph:init --shared')
+        ->expectsOutputToContain('Created .claude/settings.json')
         ->assertExitCode(0);
 
     expect(File::exists($settingsPath))->toBeTrue();
@@ -49,6 +49,29 @@ test('ralph:init creates settings file when none exists', function () {
 
     expect($settings['permissions']['defaultMode'])->toBe('acceptEdits')
         ->and($settings['sandbox']['enabled'])->toBeTrue()
+        ->and($settings['sandbox']['autoAllowBashIfSandboxed'])->toBeTrue();
+
+    // Cleanup
+    File::deleteDirectory($claudeDir);
+});
+
+test('ralph:init creates settings.local.json with --local flag', function () {
+    $claudeDir = base_path('.claude');
+    $localPath = $claudeDir.'/settings.local.json';
+
+    // Ensure clean state
+    File::deleteDirectory($claudeDir);
+
+    $this->artisan('ralph:init --local')
+        ->expectsOutputToContain('Created .claude/settings.local.json')
+        ->assertExitCode(0);
+
+    expect(File::exists($localPath))->toBeTrue();
+
+    /** @var array<string, mixed> $settings */
+    $settings = json_decode(File::get($localPath), true);
+
+    expect($settings['sandbox']['enabled'])->toBeTrue()
         ->and($settings['sandbox']['autoAllowBashIfSandboxed'])->toBeTrue();
 
     // Cleanup
@@ -65,8 +88,8 @@ test('ralph:init merges with existing settings', function () {
         'permissions' => ['existingPerm' => true],
     ], JSON_PRETTY_PRINT));
 
-    $this->artisan('ralph:init')
-        ->expectsOutputToContain('Updated')
+    $this->artisan('ralph:init --shared')
+        ->expectsOutputToContain('Updated .claude/settings.json')
         ->assertExitCode(0);
 
     /** @var array<string, mixed> $settings */
@@ -89,7 +112,7 @@ test('ralph:init fails on invalid existing json', function () {
     File::ensureDirectoryExists($claudeDir);
     File::put($settingsPath, 'not valid json{{{');
 
-    $this->artisan('ralph:init')
+    $this->artisan('ralph:init --shared')
         ->expectsOutputToContain('not valid JSON')
         ->assertExitCode(1);
 

@@ -527,18 +527,11 @@ class StartCommand extends Command
 
     private function checkSandboxConfig(): void
     {
-        $settingsPath = base_path('.claude/settings.json');
+        $settings = $this->loadMergedClaudeSettings();
 
-        if (! File::exists($settingsPath)) {
+        if ($settings === []) {
             $this->components->warn('No .claude/settings.json found. Run `php artisan ralph:init` to configure sandbox permissions.');
 
-            return;
-        }
-
-        /** @var array<string, mixed>|null $settings */
-        $settings = json_decode(File::get($settingsPath), true);
-
-        if (! is_array($settings)) {
             return;
         }
 
@@ -550,6 +543,34 @@ class StartCommand extends Command
         if (! $sandboxEnabled || ! $autoAllow) {
             $this->components->warn('Sandbox not fully configured. Run `php artisan ralph:init` to fix. Without this, Claude may hang waiting for Bash approval.');
         }
+    }
+
+    /**
+     * Load .claude/settings.json merged with .claude/settings.local.json (local takes precedence).
+     *
+     * @return array<string, mixed>
+     */
+    private function loadMergedClaudeSettings(): array
+    {
+        $settings = [];
+
+        foreach (['settings.json', 'settings.local.json'] as $file) {
+            $path = base_path('.claude/'.$file);
+
+            if (! File::exists($path)) {
+                continue;
+            }
+
+            /** @var array<string, mixed>|null $decoded */
+            $decoded = json_decode(File::get($path), true);
+
+            if (is_array($decoded)) {
+                /** @var array<string, mixed> $settings */
+                $settings = array_replace_recursive($settings, $decoded);
+            }
+        }
+
+        return $settings;
     }
 
     private function createSessionLogger(string $name): RalphLogger

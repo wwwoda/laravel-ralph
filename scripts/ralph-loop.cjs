@@ -41,6 +41,7 @@ function parseArgs() {
     sessionId: null,
     budget: null,
     fresh: false,
+    skipPermissions: false,
     logPath: null,
     maxConsecutiveFailures: parseInt(
       process.env.AGENT_MAX_CONSECUTIVE_FAILURES || "3",
@@ -77,6 +78,15 @@ function parseArgs() {
         break;
       case "--fresh":
         parsed.fresh = true;
+        break;
+      case "--skip-permissions":
+        if (process.env.LARAVEL_SAIL !== "1") {
+          console.error(
+            `${color.red}Error: --skip-permissions requires LARAVEL_SAIL=1 (Sail container).${color.reset}`,
+          );
+          process.exit(1);
+        }
+        parsed.skipPermissions = true;
         break;
       case "--log-path":
         parsed.logPath = args[++i];
@@ -314,9 +324,13 @@ function buildClaudeArgs(config, prompt, iteration) {
     "--verbose",
     "--output-format",
     "stream-json",
-    "--permission-mode",
-    config.permissionMode,
   ];
+
+  if (config.skipPermissions) {
+    commonArgs.push("--dangerously-skip-permissions");
+  } else {
+    commonArgs.push("--permission-mode", config.permissionMode);
+  }
 
   if (config.model) {
     commonArgs.push("--model", config.model);
@@ -384,6 +398,9 @@ async function main() {
     `${color.bold}${color.blue}║  Resume: ${resumeMode ? "enabled" : "disabled"}${color.reset}`,
   );
   console.log(
+    `${color.bold}${color.blue}║  Skip permissions: ${config.skipPermissions ? "yes" : "no"}${color.reset}`,
+  );
+  console.log(
     `${color.bold}${color.blue}║  Log: ${logger.path}${color.reset}`,
   );
   console.log(
@@ -393,7 +410,7 @@ async function main() {
 
   logger.info(`Starting ralph loop: ${config.name}`);
   logger.info(`Iterations: ${config.iterations}`);
-  logger.info(`Permission mode: ${config.permissionMode}`);
+  logger.info(`Permissions: ${config.skipPermissions ? "skipped (dangerously)" : `mode=${config.permissionMode}`}`);
   logger.info(`Model: ${config.model || "default"}`);
   logger.info(`Session ID: ${config.sessionId || "none"}`);
   logger.info(`Resume: ${resumeMode ? "enabled" : "disabled"}`);
@@ -447,7 +464,12 @@ async function main() {
           );
           logger.info("Retrying iteration as fresh invocation");
 
-          const freshArgs = ["-p", fullPrompt, "--verbose", "--output-format", "stream-json", "--permission-mode", config.permissionMode];
+          const freshArgs = ["-p", fullPrompt, "--verbose", "--output-format", "stream-json"];
+          if (config.skipPermissions) {
+            freshArgs.push("--dangerously-skip-permissions");
+          } else {
+            freshArgs.push("--permission-mode", config.permissionMode);
+          }
           if (config.model) freshArgs.push("--model", config.model);
           if (config.budget) freshArgs.push("--max-budget-usd", config.budget);
 

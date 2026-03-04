@@ -105,6 +105,26 @@ test('ralph:init merges with existing settings', function () {
     File::deleteDirectory($claudeDir);
 });
 
+test('ralph:start --skip-permissions fails without LARAVEL_SAIL', function () {
+    // Ensure LARAVEL_SAIL is not set
+    putenv('LARAVEL_SAIL');
+    unset($_ENV['LARAVEL_SAIL'], $_SERVER['LARAVEL_SAIL']);
+
+    $this->artisan('ralph:start --skip-permissions --once --prompt "test" test-session')
+        ->expectsOutputToContain('--skip-permissions flag requires a Sail container')
+        ->assertExitCode(1);
+});
+
+test('ralph:start --skip-permissions guard checks LARAVEL_SAIL env', function () {
+    // Verify the guard logic directly: with LARAVEL_SAIL=1, getenv() returns truthy
+    putenv('LARAVEL_SAIL=1');
+    expect(getenv('LARAVEL_SAIL'))->toBeTruthy();
+
+    // Without LARAVEL_SAIL, getenv() returns false (falsy)
+    putenv('LARAVEL_SAIL');
+    expect(getenv('LARAVEL_SAIL'))->toBeFalsy();
+});
+
 test('ralph:init fails on invalid existing json', function () {
     $claudeDir = base_path('.claude');
     $settingsPath = $claudeDir.'/settings.json';

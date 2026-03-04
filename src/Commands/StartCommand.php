@@ -464,19 +464,23 @@ class StartCommand extends Command
 
     private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath): string
     {
-        /** @var string $permissionMode */
-        $permissionMode = config('ralph.loop.permission_mode');
-
         $cmd = sprintf(
-            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --session-id %s --log-path %s',
+            'node %s --prompt %s --name %s --iterations %d --session-id %s --log-path %s',
             escapeshellarg($scriptPath),
             escapeshellarg($prompt),
             escapeshellarg($name),
             $iterations,
-            escapeshellarg($permissionMode),
             escapeshellarg($sessionId),
             escapeshellarg($logPath),
         );
+
+        if ($this->option('skip-permissions')) {
+            $cmd .= ' --skip-permissions';
+        } else {
+            /** @var string $permissionMode */
+            $permissionMode = config('ralph.loop.permission_mode');
+            $cmd .= ' --permission-mode '.escapeshellarg($permissionMode);
+        }
 
         $model = $this->resolveModel();
         if (is_string($model)) {
@@ -490,10 +494,6 @@ class StartCommand extends Command
 
         if ($this->option('fresh')) {
             $cmd .= ' --fresh';
-        }
-
-        if ($this->option('skip-permissions')) {
-            $cmd .= ' --skip-permissions';
         }
 
         return $cmd;

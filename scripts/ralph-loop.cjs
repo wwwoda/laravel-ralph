@@ -80,6 +80,12 @@ function parseArgs() {
         parsed.fresh = true;
         break;
       case "--skip-permissions":
+        if (process.env.LARAVEL_SAIL !== "1") {
+          console.error(
+            `${color.red}Error: --skip-permissions requires LARAVEL_SAIL=1 (Sail container).${color.reset}`,
+          );
+          process.exit(1);
+        }
         parsed.skipPermissions = true;
         break;
       case "--log-path":
@@ -404,8 +410,7 @@ async function main() {
 
   logger.info(`Starting ralph loop: ${config.name}`);
   logger.info(`Iterations: ${config.iterations}`);
-  logger.info(`Permission mode: ${config.permissionMode}`);
-  logger.info(`Skip permissions: ${config.skipPermissions}`);
+  logger.info(`Permissions: ${config.skipPermissions ? "skipped (dangerously)" : `mode=${config.permissionMode}`}`);
   logger.info(`Model: ${config.model || "default"}`);
   logger.info(`Session ID: ${config.sessionId || "none"}`);
   logger.info(`Resume: ${resumeMode ? "enabled" : "disabled"}`);

@@ -29,9 +29,22 @@ class StartCommand extends Command
         {--resume : Resume a previously stopped session}
         {--attach : Attach to screen session after starting}
         {--once : Run single iteration in foreground}
+        {--speckit= : Spec Kit feature directory name (e.g. 349-multi-user-orgs). Omit value for interactive selection.}
         {--skip-permissions : Run Claude with --dangerously-skip-permissions (requires Sail container)}';
 
     protected $description = 'Start a Ralph agent loop';
+
+    private const SPECKIT_SUFFIX = <<<'SUFFIX'
+Complete exactly ONE task per iteration. After implementing:
+1. Mark it `- [x]` in tasks.md
+2. Run relevant tests
+3. Commit with a descriptive message
+4. If ALL tasks are `- [x]`, output <promise>COMPLETE</promise>
+5. Otherwise STOP — the next iteration handles the next task
+SUFFIX;
+
+    /** @var array<string, mixed> */
+    private array $promptSource = [];
 
     public function handle(SessionTracker $tracker, ScreenManager $screenManager): int
     {
@@ -55,6 +68,7 @@ class StartCommand extends Command
 
         // Resolve what to work on first (determines suggested name)
         $promptSource = $this->resolvePromptSource();
+        $this->promptSource = $promptSource;
 
         // Name: explicit arg > suggested from prompt source > interactive
         $name = $this->resolveName($promptSource['suggested_name']);
@@ -201,11 +215,22 @@ class StartCommand extends Command
     }
 
     /**
-     * @return array{content: string, suggested_name: ?string, source: string, file: ?string}
+     * @return array{content: string, suggested_name: ?string, source: string, file: ?string, suffix?: string, continuation?: string}
      */
     private function resolvePromptSource(): array
     {
-        // 1. Explicit --issue flag
+        // 1. Explicit --speckit flag
+        $speckit = $this->option('speckit');
+        if ($speckit !== null) {
+            $source = ! is_string($speckit) || $speckit === ''
+                ? $this->resolveInteractiveSpeckitSource()
+                : $this->resolveSpeckitSource($speckit);
+            $source['file'] = null;
+
+            return $source;
+        }
+
+        // 2. Explicit --issue flag
         $issue = $this->option('issue');
         if (is_string($issue) && $issue !== '') {
             return [
@@ -216,7 +241,7 @@ class StartCommand extends Command
             ];
         }
 
-        // 2. Explicit --prompt flag
+        // 3. Explicit --prompt flag
         $prompt = $this->option('prompt');
         if (is_string($prompt) && $prompt !== '') {
             if (File::exists($prompt)) {
@@ -236,7 +261,7 @@ class StartCommand extends Command
             ];
         }
 
-        // 3. Interactive mode
+        // 4. Interactive mode
         $interactive = $this->resolveInteractivePromptSource();
         $interactive['file'] = null;
 
@@ -266,6 +291,16 @@ class StartCommand extends Command
             $options['prd'] = 'Select a PRD';
         }
 
+        // Check for Spec Kit features
+        /** @var string $specRelPath */
+        $specRelPath = config('ralph.speckit.specs_path');
+        $specsPath = base_path($specRelPath);
+        $specs = $this->discoverSpecs($specsPath);
+
+        if ($specs !== []) {
+            $options['speckit'] = 'Select a Spec Kit feature';
+        }
+
         $options['manual'] = 'Enter prompt manually';
 
         // If only manual is available, skip the selection
@@ -281,6 +316,7 @@ class StartCommand extends Command
         return match ($source) {
             'issue' => $this->resolveInteractiveIssueSource(),
             'prd' => $this->resolveInteractivePrdSource($prdPath, $prds),
+            'speckit' => $this->resolveInteractiveSpeckitSource(),
             default => $this->resolveManualPromptSource(),
         };
     }
@@ -438,6 +474,134 @@ class StartCommand extends Command
             ->all();
     }
 
+    /**
+     * @return array{content: string, suggested_name: string, source: string, suffix: string, continuation: string}
+     */
+    private function resolveSpeckitSource(string $specName): array
+    {
+        /** @var string $specRelPath */
+        $specRelPath = config('ralph.speckit.specs_path');
+        $specDir = base_path($specRelPath).'/'.$specName;
+
+        if (! File::exists($specDir.'/tasks.md') || ! File::exists($specDir.'/plan.md')) {
+            $this->components->error("Spec '{$specName}' missing required tasks.md or plan.md");
+            exit(self::FAILURE);
+        }
+
+        return [
+            'content' => $this->buildSpeckitPrompt($specDir),
+            'suggested_name' => $specName,
+            'source' => "speckit:{$specName}",
+            'suffix' => self::SPECKIT_SUFFIX,
+            'continuation' => $this->buildSpeckitPrompt($specDir, isContinuation: true),
+        ];
+    }
+
+    /**
+     * @return array{content: string, suggested_name: string, source: string, suffix: string, continuation: string}
+     */
+    private function resolveInteractiveSpeckitSource(): array
+    {
+        /** @var string $specRelPath */
+        $specRelPath = config('ralph.speckit.specs_path');
+        $specsPath = base_path($specRelPath);
+        $specs = $this->discoverSpecs($specsPath);
+
+        if ($specs === []) {
+            $this->components->error('No valid Spec Kit features found.');
+            exit(self::FAILURE);
+        }
+
+        $selected = select(
+            label: 'Select a Spec Kit feature',
+            options: array_keys($specs),
+        );
+
+        $specDir = $specsPath.'/'.$selected;
+
+        return [
+            'content' => $this->buildSpeckitPrompt($specDir),
+            'suggested_name' => (string) $selected,
+            'source' => "speckit:{$selected}",
+            'suffix' => self::SPECKIT_SUFFIX,
+            'continuation' => $this->buildSpeckitPrompt($specDir, isContinuation: true),
+        ];
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function discoverSpecs(string $specsPath): array
+    {
+        if (! File::isDirectory($specsPath)) {
+            return [];
+        }
+
+        /** @var list<string> $dirs */
+        $dirs = File::directories($specsPath);
+
+        return collect($dirs)
+            ->mapWithKeys(fn (string $dir): array => [basename($dir) => basename($dir)])
+            ->filter(fn (string $name): bool => File::exists($specsPath.'/'.$name.'/tasks.md')
+                && File::exists($specsPath.'/'.$name.'/plan.md'))
+            ->all();
+    }
+
+    private function buildSpeckitPrompt(string $specDir, bool $isContinuation = false): string
+    {
+        $files = [
+            $specDir.'/tasks.md',
+            $specDir.'/plan.md',
+        ];
+
+        foreach (['spec.md', 'data-model.md', 'research.md', 'quickstart.md'] as $optional) {
+            $path = $specDir.'/'.$optional;
+            if (File::exists($path)) {
+                $files[] = $path;
+            }
+        }
+
+        $contractsDir = $specDir.'/contracts';
+        if (File::isDirectory($contractsDir)) {
+            foreach (File::files($contractsDir) as $file) {
+                if ($file->getExtension() === 'md') {
+                    $files[] = $file->getPathname();
+                }
+            }
+        }
+
+        $fileRefs = implode("\n", array_map(fn (string $f): string => "@{$f}", $files));
+
+        if ($isContinuation) {
+            return <<<PROMPT
+            Continue implementing the Spec Kit feature. Find and implement the next incomplete task.
+
+            {$fileRefs}
+
+            Read tasks.md and find the FIRST `- [ ]` task. Implement it using the spec documents for context. Run tests, mark it `- [x]`, and commit. Output <promise>COMPLETE</promise> when zero incomplete tasks remain.
+            PROMPT;
+        }
+
+        return <<<PROMPT
+        Implement the next incomplete task from the Spec Kit feature spec.
+
+        {$fileRefs}
+
+        ## Instructions
+
+        1. Read tasks.md — find the FIRST task marked `- [ ]` (incomplete)
+        2. Read plan.md for architecture, tech stack, and file structure
+        3. If available, use spec.md for requirements and acceptance criteria
+        4. If available, use data-model.md for entity definitions
+        5. If available, use research.md for technical decisions
+        6. Implement that single task
+        7. Run tests relevant to the change
+        8. Mark the completed task `- [x]` in tasks.md
+        9. Commit your changes with a descriptive message
+        10. If zero `- [ ]` tasks remain in tasks.md, output <promise>COMPLETE</promise>
+        PROMPT;
+    }
+
     private function writePromptFile(string $name, string $content): string
     {
         /** @var string $logDir */
@@ -505,13 +669,13 @@ class StartCommand extends Command
     private function buildEnv(): array
     {
         /** @var string $suffix */
-        $suffix = config('ralph.prompt.suffix', '');
+        $suffix = $this->promptSource['suffix'] ?? config('ralph.prompt.suffix', '');
         /** @var string $logDir */
         $logDir = config('ralph.logging.directory', '');
         /** @var string $marker */
         $marker = config('ralph.loop.completion_marker', '');
         /** @var string $continuation */
-        $continuation = config('ralph.prompt.continuation', '');
+        $continuation = $this->promptSource['continuation'] ?? config('ralph.prompt.continuation', '');
         /** @var int $maxFailures */
         $maxFailures = config('ralph.loop.max_consecutive_failures', 3);
         /** @var int $nonJsonThreshold */

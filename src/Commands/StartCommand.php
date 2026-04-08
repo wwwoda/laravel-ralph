@@ -30,9 +30,16 @@ class StartCommand extends Command
         {--attach : Attach to screen session after starting}
         {--once : Run single iteration in foreground}
         {--speckit= : Spec Kit feature directory name (e.g. 349-multi-user-orgs). Omit value for interactive selection.}
-        {--skip-permissions : Run Claude with --dangerously-skip-permissions (requires Sail container)}';
+        {--permission-mode= : Claude permission mode (auto, dontAsk, bypassPermissions, danger, dangerous)}';
 
     protected $description = 'Start a Ralph agent loop';
+
+    private const VALID_PERMISSION_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'];
+
+    private const PERMISSION_MODE_ALIASES = [
+        'danger' => 'bypassPermissions',
+        'dangerous' => 'bypassPermissions',
+    ];
 
     private const SPECKIT_SUFFIX = <<<'SUFFIX'
 Complete exactly ONE task per iteration. After implementing:
@@ -54,9 +61,8 @@ SUFFIX;
             return self::FAILURE;
         }
 
-        if ($this->option('skip-permissions') && ! getenv('LARAVEL_SAIL')) {
-            $this->components->error('The --skip-permissions flag requires a Sail container (LARAVEL_SAIL=1)');
-
+        $permissionMode = $this->resolvePermissionMode();
+        if ($permissionMode === null) {
             return self::FAILURE;
         }
 
@@ -93,14 +99,14 @@ SUFFIX;
         $logger->info("Iterations: {$iterations}");
         $logger->info('Model: '.($model ?? 'default'));
         $logger->info('Mode: '.($this->option('fresh') ? 'fresh' : 'resume'));
-        $logger->info('Skip permissions: '.($this->option('skip-permissions') ? 'true' : 'false'));
+        $logger->info("Permission mode: {$permissionMode}");
         $logger->info("Working dir: {$workingDir}");
 
         // Build the ralph-loop command
         /** @var string|null $configScriptPath */
         $configScriptPath = config('ralph.script_path');
         $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
-        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path());
+        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
         $logger->debug("Loop command: {$loopCmd}");
 
         // Foreground (--once) mode
@@ -613,6 +619,30 @@ SUFFIX;
         return $tmpFile;
     }
 
+    private function resolvePermissionMode(): ?string
+    {
+        $mode = $this->option('permission-mode');
+
+        if (! is_string($mode) || $mode === '') {
+            /** @var string $mode */
+            $mode = config('ralph.loop.permission_mode');
+        }
+
+        $mode = self::PERMISSION_MODE_ALIASES[$mode] ?? $mode;
+
+        if (! in_array($mode, self::VALID_PERMISSION_MODES, true)) {
+            $valid = implode(', ', [
+                ...self::VALID_PERMISSION_MODES,
+                ...array_keys(self::PERMISSION_MODE_ALIASES),
+            ]);
+            $this->components->error("Invalid permission mode '{$mode}'. Valid: {$valid}");
+
+            return null;
+        }
+
+        return $mode;
+    }
+
     private function resolveModel(): ?string
     {
         $model = $this->option('model');
@@ -626,25 +656,18 @@ SUFFIX;
         return is_string($configModel) && $configModel !== '' ? $configModel : null;
     }
 
-    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath): string
+    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath, string $permissionMode): string
     {
         $cmd = sprintf(
-            'node %s --prompt %s --name %s --iterations %d --session-id %s --log-path %s',
+            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --session-id %s --log-path %s',
             escapeshellarg($scriptPath),
             escapeshellarg($prompt),
             escapeshellarg($name),
             $iterations,
+            escapeshellarg($permissionMode),
             escapeshellarg($sessionId),
             escapeshellarg($logPath),
         );
-
-        if ($this->option('skip-permissions')) {
-            $cmd .= ' --skip-permissions';
-        } else {
-            /** @var string $permissionMode */
-            $permissionMode = config('ralph.loop.permission_mode');
-            $cmd .= ' --permission-mode '.escapeshellarg($permissionMode);
-        }
 
         $model = $this->resolveModel();
         if (is_string($model)) {

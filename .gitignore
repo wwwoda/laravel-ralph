@@ -2,3 +2,5 @@
 /.phpunit.cache/
 composer.lock
 .DS_Store
+.live-agents
+.live-agents.lock

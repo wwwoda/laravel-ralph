@@ -30,6 +30,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Session manager
+    |--------------------------------------------------------------------------
+    |
+    | Which terminal multiplexer backs ralph's detached sessions.
+    | Supported: 'screen' (default — GNU screen) | 'tmux'.
+    |
+    */
+
+    'session' => [
+        'manager' => env('RALPH_SESSION_MANAGER', 'screen'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Screen Sessions
     |--------------------------------------------------------------------------
     */
@@ -37,6 +51,21 @@ return [
     'screen' => [
         'prefix' => 'ralph',
         'shell' => env('RALPH_SCREEN_SHELL', 'zsh'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tmux Sessions
+    |--------------------------------------------------------------------------
+    |
+    | Only consulted when `session.manager` is 'tmux'. Standalone detached
+    | sessions are created (one per ralph session); shell selection is
+    | controlled by tmux's own `default-shell` setting.
+    |
+    */
+
+    'tmux' => [
+        'prefix' => 'ralph',
     ],
 
     /*

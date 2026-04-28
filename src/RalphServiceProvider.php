@@ -5,12 +5,14 @@ namespace Woda\Ralph;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\ServiceProvider;
+use InvalidArgumentException;
 use Woda\Ralph\Commands\AttachCommand;
 use Woda\Ralph\Commands\InitCommand;
 use Woda\Ralph\Commands\KillCommand;
 use Woda\Ralph\Commands\LogsCommand;
 use Woda\Ralph\Commands\StartCommand;
 use Woda\Ralph\Commands\StatusCommand;
+use Woda\Ralph\Contracts\SessionManager;
 
 class RalphServiceProvider extends ServiceProvider
 {
@@ -27,13 +29,33 @@ class RalphServiceProvider extends ServiceProvider
             return new ScreenManager(prefix: $prefix, shell: $shell);
         });
 
+        $this->app->singleton(TmuxManager::class, function (): TmuxManager {
+            /** @var string $prefix */
+            $prefix = config('ralph.tmux.prefix');
+
+            return new TmuxManager(prefix: $prefix);
+        });
+
+        $this->app->singleton(SessionManager::class, function (Application $app): SessionManager {
+            /** @var string $manager */
+            $manager = config('ralph.session.manager', 'screen');
+
+            return match ($manager) {
+                'screen' => $app->make(ScreenManager::class),
+                'tmux' => $app->make(TmuxManager::class),
+                default => throw new InvalidArgumentException(
+                    "Unknown ralph session manager '{$manager}'. Expected 'screen' or 'tmux'.",
+                ),
+            };
+        });
+
         $this->app->singleton(SessionTracker::class, function (Application $app): SessionTracker {
             /** @var string $trackingFile */
             $trackingFile = config('ralph.tracking.file');
 
             return new SessionTracker(
                 trackingFile: $this->resolveMainWorktreeRoot().'/'.$trackingFile,
-                screenManager: $app->make(ScreenManager::class),
+                sessionManager: $app->make(SessionManager::class),
             );
         });
     }

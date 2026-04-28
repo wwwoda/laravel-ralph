@@ -5,8 +5,9 @@ namespace Woda\Ralph;
 use Illuminate\Process\PendingProcess;
 use Illuminate\Support\Facades\Process;
 use RuntimeException;
+use Woda\Ralph\Contracts\SessionManager;
 
-class ScreenManager
+class ScreenManager implements SessionManager
 {
     public function __construct(
         private readonly string $prefix,

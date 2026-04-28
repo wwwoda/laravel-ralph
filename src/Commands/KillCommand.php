@@ -3,7 +3,7 @@
 namespace Woda\Ralph\Commands;
 
 use Illuminate\Console\Command;
-use Woda\Ralph\ScreenManager;
+use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\SessionTracker;
 
 use function Laravel\Prompts\confirm;
@@ -18,10 +18,10 @@ class KillCommand extends Command
 
     protected $description = 'Kill a ralph session';
 
-    public function handle(SessionTracker $tracker, ScreenManager $screenManager): int
+    public function handle(SessionTracker $tracker, SessionManager $sessionManager): int
     {
         if ($this->option('all')) {
-            return $this->killAll($tracker, $screenManager);
+            return $this->killAll($tracker, $sessionManager);
         }
 
         $sessionArg = $this->argument('session');
@@ -50,7 +50,7 @@ class KillCommand extends Command
             }
         }
 
-        $screenManager->kill($session);
+        $sessionManager->kill($session);
         $tracker->untrack($session);
 
         $this->components->info("Session '{$session}' killed.");
@@ -58,7 +58,7 @@ class KillCommand extends Command
         return self::SUCCESS;
     }
 
-    private function killAll(SessionTracker $tracker, ScreenManager $screenManager): int
+    private function killAll(SessionTracker $tracker, SessionManager $sessionManager): int
     {
         $agents = $tracker->all();
 
@@ -78,7 +78,7 @@ class KillCommand extends Command
 
         foreach ($agents as $key => $agent) {
             $agentName = is_string($agent['name'] ?? null) ? $agent['name'] : (string) $key;
-            $screenManager->kill($agentName);
+            $sessionManager->kill($agentName);
             $tracker->untrack((string) $key);
             $this->components->info("Killed '{$key}'.");
         }

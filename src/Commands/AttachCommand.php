@@ -3,7 +3,7 @@
 namespace Woda\Ralph\Commands;
 
 use Illuminate\Console\Command;
-use Woda\Ralph\ScreenManager;
+use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\SessionTracker;
 
 use function Laravel\Prompts\select;
@@ -12,9 +12,9 @@ class AttachCommand extends Command
 {
     protected $signature = 'ralph:attach {session? : Session name to attach to}';
 
-    protected $description = 'Attach to a ralph screen session';
+    protected $description = 'Attach to a ralph session';
 
-    public function handle(SessionTracker $tracker, ScreenManager $screenManager): int
+    public function handle(SessionTracker $tracker, SessionManager $sessionManager): int
     {
         $sessionArg = $this->argument('session');
         $session = is_string($sessionArg) ? $sessionArg : null;
@@ -39,13 +39,13 @@ class AttachCommand extends Command
             }
         }
 
-        if (! $screenManager->isRunning($session)) {
+        if (! $sessionManager->isRunning($session)) {
             $this->components->error("Session '{$session}' is not running.");
 
             return self::FAILURE;
         }
 
-        $cmd = $screenManager->attachCommand($session);
+        $cmd = $sessionManager->attachCommand($session);
         passthru($cmd);
 
         return self::SUCCESS;

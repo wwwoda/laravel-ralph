@@ -1,7 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\File;
-use Woda\Ralph\ScreenManager;
+use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\SessionTracker;
 
 beforeEach(function () {
@@ -9,11 +9,11 @@ beforeEach(function () {
     File::delete($this->trackingFile);
     File::delete($this->trackingFile.'.lock');
 
-    $this->screenManager = Mockery::mock(ScreenManager::class);
+    $this->sessionManager = Mockery::mock(SessionManager::class);
 
     $this->tracker = new SessionTracker(
         trackingFile: $this->trackingFile,
-        screenManager: $this->screenManager,
+        sessionManager: $this->sessionManager,
     );
 });
 
@@ -83,9 +83,9 @@ test('running filters to only sessions that are alive', function () {
         'screen_name' => 'ralph-dead',
     ]);
 
-    $this->screenManager->shouldReceive('isRunning')
+    $this->sessionManager->shouldReceive('isRunning')
         ->with('alive')->andReturn(true);
-    $this->screenManager->shouldReceive('isRunning')
+    $this->sessionManager->shouldReceive('isRunning')
         ->with('dead')->andReturn(false);
 
     $running = $this->tracker->running();
@@ -115,9 +115,9 @@ test('clean removes dead entries', function () {
         'screen_name' => 'ralph-dead',
     ]);
 
-    $this->screenManager->shouldReceive('isRunning')
+    $this->sessionManager->shouldReceive('isRunning')
         ->with('alive')->andReturn(true);
-    $this->screenManager->shouldReceive('isRunning')
+    $this->sessionManager->shouldReceive('isRunning')
         ->with('dead')->andReturn(false);
 
     $cleaned = $this->tracker->clean();
@@ -127,7 +127,7 @@ test('clean removes dead entries', function () {
         ->and($this->tracker->all())->toHaveKey('alive');
 });
 
-test('isRunning checks screen manager', function () {
+test('isRunning checks session manager', function () {
     $this->tracker->track('test', [
         'name' => 'test',
         'prompt_source' => 'test.md',
@@ -138,7 +138,7 @@ test('isRunning checks screen manager', function () {
         'screen_name' => 'ralph-test',
     ]);
 
-    $this->screenManager->shouldReceive('isRunning')
+    $this->sessionManager->shouldReceive('isRunning')
         ->with('test')->andReturn(true);
 
     expect($this->tracker->isRunning('test'))->toBeTrue();

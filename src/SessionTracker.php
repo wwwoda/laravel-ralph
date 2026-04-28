@@ -5,12 +5,13 @@ namespace Woda\Ralph;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\File;
 use RuntimeException;
+use Woda\Ralph\Contracts\SessionManager;
 
 class SessionTracker
 {
     public function __construct(
         private readonly string $trackingFile,
-        private readonly ScreenManager $screenManager,
+        private readonly SessionManager $sessionManager,
     ) {}
 
     /**
@@ -29,7 +30,7 @@ class SessionTracker
     {
         $agents = $this->all();
 
-        return array_filter($agents, fn (array $agent): bool => isset($agent['name']) && is_string($agent['name']) && $this->screenManager->isRunning($agent['name']));
+        return array_filter($agents, fn (array $agent): bool => isset($agent['name']) && is_string($agent['name']) && $this->sessionManager->isRunning($agent['name']));
     }
 
     /**
@@ -57,7 +58,7 @@ class SessionTracker
     }
 
     /**
-     * Remove entries whose screen sessions are no longer running.
+     * Remove entries whose sessions are no longer running.
      *
      * @return list<string> Keys that were cleaned
      */
@@ -70,7 +71,7 @@ class SessionTracker
 
             foreach ($agents as $key => $agent) {
                 $agentName = isset($agent['name']) && is_string($agent['name']) ? $agent['name'] : null;
-                if ($agentName === null || ! $this->screenManager->isRunning($agentName)) {
+                if ($agentName === null || ! $this->sessionManager->isRunning($agentName)) {
                     unset($agents[$key]);
                     $cleaned[] = (string) $key;
                 }
@@ -92,7 +93,7 @@ class SessionTracker
 
         $name = $agents[$key]['name'] ?? null;
 
-        return is_string($name) && $this->screenManager->isRunning($name);
+        return is_string($name) && $this->sessionManager->isRunning($name);
     }
 
     /**

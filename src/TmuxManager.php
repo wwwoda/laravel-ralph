@@ -2,15 +2,15 @@
 
 namespace Woda\Ralph;
 
-use Illuminate\Process\PendingProcess;
-use Illuminate\Support\Facades\Process;
 use RuntimeException;
+use Woda\Ralph\Contracts\CommandRunner;
 use Woda\Ralph\Contracts\SessionManager;
 
 class TmuxManager implements SessionManager
 {
     public function __construct(
         private readonly string $prefix,
+        private readonly CommandRunner $runner,
     ) {}
 
     /**
@@ -20,7 +20,7 @@ class TmuxManager implements SessionManager
     {
         // Format: "<session_created>:<session_name>". `tmux list-sessions` returns
         // exit code 1 when no server is running; treat as empty.
-        $result = $this->process()->run(
+        $result = $this->runner->run(
             'tmux list-sessions -F "#{session_created}:#{session_name}" 2>/dev/null',
         );
 
@@ -61,7 +61,7 @@ class TmuxManager implements SessionManager
     {
         $fullName = $this->fullName($sessionName);
 
-        $result = $this->process()->run(
+        $result = $this->runner->run(
             sprintf('tmux has-session -t %s 2>/dev/null', escapeshellarg($fullName)),
         );
 
@@ -76,14 +76,16 @@ class TmuxManager implements SessionManager
             throw new RuntimeException("Tmux session '{$fullName}' is already running.");
         }
 
+        $sessionWorkingDir = $this->runner->workingDirectory($workingDir);
+
         $parts = [
             'tmux', 'new-session', '-d',
             '-s', escapeshellarg($fullName),
         ];
 
-        if ($workingDir !== null && $workingDir !== '') {
+        if ($sessionWorkingDir !== null && $sessionWorkingDir !== '') {
             $parts[] = '-c';
-            $parts[] = escapeshellarg($workingDir);
+            $parts[] = escapeshellarg($sessionWorkingDir);
         }
 
         $parts[] = 'bash';
@@ -92,7 +94,7 @@ class TmuxManager implements SessionManager
 
         $cmd = implode(' ', $parts);
 
-        $result = $this->process()->run($cmd);
+        $result = $this->runner->run($cmd);
 
         if (! $result->successful()) {
             throw new RuntimeException("Failed to start tmux session: {$result->errorOutput()}");
@@ -107,7 +109,7 @@ class TmuxManager implements SessionManager
             return false;
         }
 
-        $result = $this->process()->run(
+        $result = $this->runner->run(
             sprintf('tmux kill-session -t %s', escapeshellarg($fullName)),
         );
 
@@ -116,16 +118,13 @@ class TmuxManager implements SessionManager
 
     public function attachCommand(string $sessionName): string
     {
-        return sprintf('tmux attach -t %s', escapeshellarg($this->fullName($sessionName)));
+        return $this->runner->buildInteractive(
+            sprintf('tmux attach -t %s', escapeshellarg($this->fullName($sessionName))),
+        );
     }
 
     public function fullName(string $sessionName): string
     {
         return $this->prefix.'-'.$sessionName;
-    }
-
-    private function process(): PendingProcess
-    {
-        return Process::timeout(10);
     }
 }

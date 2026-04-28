@@ -2,9 +2,8 @@
 
 namespace Woda\Ralph;
 
-use Illuminate\Process\PendingProcess;
-use Illuminate\Support\Facades\Process;
 use RuntimeException;
+use Woda\Ralph\Contracts\CommandRunner;
 use Woda\Ralph\Contracts\SessionManager;
 
 class ScreenManager implements SessionManager
@@ -12,6 +11,7 @@ class ScreenManager implements SessionManager
     public function __construct(
         private readonly string $prefix,
         private readonly string $shell,
+        private readonly CommandRunner $runner,
     ) {}
 
     /**
@@ -20,7 +20,7 @@ class ScreenManager implements SessionManager
     public function listSessions(): array
     {
         // screen -ls returns exit code 1 when sessions exist, 0 when none
-        $result = $this->process()->run('screen -ls');
+        $result = $this->runner->run('screen -ls');
         $output = $result->output();
 
         $sessions = [];
@@ -72,13 +72,7 @@ class ScreenManager implements SessionManager
             escapeshellarg($command),
         );
 
-        $process = $this->process();
-
-        if ($workingDir) {
-            $process = $process->path($workingDir);
-        }
-
-        $result = $process->run($cmd);
+        $result = $this->runner->run($cmd, $this->runner->workingDirectory($workingDir));
 
         if (! $result->successful()) {
             throw new RuntimeException("Failed to start screen session: {$result->errorOutput()}");
@@ -93,7 +87,7 @@ class ScreenManager implements SessionManager
             return false;
         }
 
-        $result = $this->process()->run(
+        $result = $this->runner->run(
             sprintf('screen -S %s -X quit', escapeshellarg($fullName)),
         );
 
@@ -106,16 +100,13 @@ class ScreenManager implements SessionManager
      */
     public function attachCommand(string $sessionName): string
     {
-        return sprintf('screen -r %s', escapeshellarg($this->fullName($sessionName)));
+        return $this->runner->buildInteractive(
+            sprintf('screen -r %s', escapeshellarg($this->fullName($sessionName))),
+        );
     }
 
     public function fullName(string $sessionName): string
     {
         return $this->prefix.'-'.$sessionName;
-    }
-
-    private function process(): PendingProcess
-    {
-        return Process::timeout(10);
     }
 }

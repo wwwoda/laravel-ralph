@@ -15,6 +15,25 @@
 - **TmuxManager** — creates standalone detached tmux sessions per ralph
   (`tmux new-session -d -s ralph-<name> …`), mirrors the screen-manager
   interface, exposes `tmux attach -t …` as the attach command.
+- **Docker mode for Sail / compose-based projects.** A new
+  `Woda\Ralph\Contracts\CommandRunner` abstracts where shell commands run.
+  `NativeCommandRunner` runs them on the current host; `DockerCommandRunner`
+  wraps every invocation with `docker compose exec -T <service> sh -c …`,
+  so SessionManager (and anything else using a `CommandRunner`) operates
+  inside the configured compose service. `TmuxManager` and `ScreenManager`
+  now inject a `CommandRunner` rather than calling `Process` directly.
+  Selection: `config('ralph.docker.enabled')` — `null` auto-detects (on
+  when `/.dockerenv` is absent AND `base_path()/docker-compose.yml` exists),
+  `true` forces on, `false` forces off. Configurable knobs:
+  `ralph.docker.service` (default `agent`),
+  `ralph.docker.working_dir` (default `/var/www/html`).
+  Use case: claude `--dangerously-skip-permissions` is sandboxed to the
+  `agent` container; `php artisan ralph:start` from the host transparently
+  spawns the loop inside the container; `attachCommand` returns
+  `docker compose exec -it agent tmux attach -t …`.
+- **`StartCommand::validateEnvironment()` is docker-aware.** In docker
+  mode the host only needs `docker`; node/claude/screen/tmux live in the
+  container. The compose service is also asserted as running.
 
 ### Changed
 

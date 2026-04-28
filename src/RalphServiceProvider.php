@@ -12,6 +12,7 @@ use Woda\Ralph\Commands\KillCommand;
 use Woda\Ralph\Commands\LogsCommand;
 use Woda\Ralph\Commands\StartCommand;
 use Woda\Ralph\Commands\StatusCommand;
+use Woda\Ralph\Contracts\CommandRunner;
 use Woda\Ralph\Contracts\SessionManager;
 
 class RalphServiceProvider extends ServiceProvider
@@ -20,20 +21,44 @@ class RalphServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/ralph.php', 'ralph');
 
-        $this->app->singleton(ScreenManager::class, function (): ScreenManager {
+        $this->app->singleton(CommandRunner::class, function (): CommandRunner {
+            if (! $this->resolveDockerEnabled()) {
+                return new NativeCommandRunner;
+            }
+
+            /** @var string $service */
+            $service = config('ralph.docker.service', 'agent');
+            /** @var string $workingDir */
+            $workingDir = config('ralph.docker.working_dir', '/var/www/html');
+
+            return new DockerCommandRunner(
+                service: $service,
+                containerWorkingDir: $workingDir,
+                composeProjectPath: $this->resolveMainWorktreeRoot(),
+            );
+        });
+
+        $this->app->singleton(ScreenManager::class, function (Application $app): ScreenManager {
             /** @var string $prefix */
             $prefix = config('ralph.screen.prefix');
             /** @var string $shell */
             $shell = config('ralph.screen.shell');
 
-            return new ScreenManager(prefix: $prefix, shell: $shell);
+            return new ScreenManager(
+                prefix: $prefix,
+                shell: $shell,
+                runner: $app->make(CommandRunner::class),
+            );
         });
 
-        $this->app->singleton(TmuxManager::class, function (): TmuxManager {
+        $this->app->singleton(TmuxManager::class, function (Application $app): TmuxManager {
             /** @var string $prefix */
             $prefix = config('ralph.tmux.prefix');
 
-            return new TmuxManager(prefix: $prefix);
+            return new TmuxManager(
+                prefix: $prefix,
+                runner: $app->make(CommandRunner::class),
+            );
         });
 
         $this->app->singleton(SessionManager::class, function (Application $app): SessionManager {
@@ -58,6 +83,29 @@ class RalphServiceProvider extends ServiceProvider
                 sessionManager: $app->make(SessionManager::class),
             );
         });
+    }
+
+    /**
+     * Decide whether docker mode is active. Explicit config wins; absent
+     * config auto-detects: we're not inside a container AND base_path()
+     * has a docker-compose.yml.
+     */
+    private function resolveDockerEnabled(): bool
+    {
+        /** @var bool|null $explicit */
+        $explicit = config('ralph.docker.enabled');
+
+        if ($explicit !== null) {
+            return (bool) $explicit;
+        }
+
+        if (file_exists('/.dockerenv')) {
+            return false; // already inside a container
+        }
+
+        $composePath = base_path('docker-compose.yml');
+
+        return file_exists($composePath);
     }
 
     /**

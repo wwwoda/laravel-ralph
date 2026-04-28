@@ -807,7 +807,39 @@ SUFFIX;
 
     private function validateEnvironment(): bool
     {
+        $dockerMode = $this->isDockerModeActive();
+
         $missing = [];
+
+        // In docker mode the host only needs `docker`. node/claude/screen/tmux
+        // live inside the agent container.
+        if ($dockerMode) {
+            $result = Process::run('which docker');
+            if (! $result->successful()) {
+                $missing[] = 'docker';
+            }
+
+            if ($missing !== []) {
+                $this->components->error('Missing required binaries: '.implode(', ', $missing));
+
+                return false;
+            }
+
+            // Also verify the configured compose service is up.
+            /** @var string $service */
+            $service = config('ralph.docker.service', 'agent');
+            $check = Process::path(base_path())->run(
+                sprintf('docker compose ps --status running --services | grep -Fx %s', escapeshellarg($service)),
+            );
+
+            if (! $check->successful()) {
+                $this->components->error("Docker mode is on but compose service '{$service}' is not running. Bring the stack up with `docker compose up -d`.");
+
+                return false;
+            }
+
+            return true;
+        }
 
         foreach (['node', 'claude'] as $binary) {
             $result = Process::run("which {$binary}");
@@ -834,5 +866,21 @@ SUFFIX;
         }
 
         return true;
+    }
+
+    private function isDockerModeActive(): bool
+    {
+        /** @var bool|null $explicit */
+        $explicit = config('ralph.docker.enabled');
+
+        if ($explicit !== null) {
+            return (bool) $explicit;
+        }
+
+        if (file_exists('/.dockerenv')) {
+            return false;
+        }
+
+        return file_exists(base_path('docker-compose.yml'));
     }
 }

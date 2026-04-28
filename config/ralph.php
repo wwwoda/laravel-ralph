@@ -70,6 +70,35 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Docker mode
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, every shell invocation made by SessionManager (and any
+    | other CommandRunner consumer) is wrapped with `docker compose exec`,
+    | so ralph sessions live INSIDE the configured compose service rather
+    | than on the host. Use this when the project is Sail/compose-based
+    | and you want claude `--dangerously-skip-permissions` to be sandboxed
+    | to the container.
+    |
+    | enabled:
+    |   null  → auto-detect: ON when /.dockerenv is absent (we're on the host)
+    |           AND base_path() has a docker-compose.yml.
+    |   true  → force on. SessionManager exec's into the container.
+    |   false → force off. SessionManager runs on the host as before.
+    |
+    | service:     compose service name to exec into (default 'agent').
+    | working_dir: WORKDIR inside the container; passed as `-c` to tmux/screen.
+    |
+    */
+
+    'docker' => [
+        'enabled' => env('RALPH_DOCKER_ENABLED'),
+        'service' => env('RALPH_DOCKER_SERVICE', 'agent'),
+        'working_dir' => env('RALPH_DOCKER_WORKING_DIR', '/var/www/html'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Session Tracking
     |--------------------------------------------------------------------------
     */

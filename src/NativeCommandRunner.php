@@ -28,4 +28,9 @@ class NativeCommandRunner implements CommandRunner
     {
         return $hostPath;
     }
+
+    public function translatePath(string $hostPath): string
+    {
+        return $hostPath;
+    }
 }

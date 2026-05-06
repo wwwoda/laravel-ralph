@@ -54,4 +54,25 @@ class DockerCommandRunner implements CommandRunner
     {
         return $this->containerWorkingDir;
     }
+
+    public function translatePath(string $hostPath): string
+    {
+        if ($this->composeProjectPath === null) {
+            return $hostPath;
+        }
+
+        $projectRoot = rtrim($this->composeProjectPath, '/');
+        $containerRoot = rtrim($this->containerWorkingDir, '/');
+
+        if ($hostPath === $projectRoot) {
+            return $containerRoot;
+        }
+
+        $prefix = $projectRoot.'/';
+        if (str_starts_with($hostPath, $prefix)) {
+            return $containerRoot.'/'.substr($hostPath, strlen($prefix));
+        }
+
+        return $hostPath;
+    }
 }

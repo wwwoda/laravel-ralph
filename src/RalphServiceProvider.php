@@ -34,7 +34,11 @@ class RalphServiceProvider extends ServiceProvider
             return new DockerCommandRunner(
                 service: $service,
                 containerWorkingDir: $workingDir,
-                composeProjectPath: $this->resolveMainWorktreeRoot(),
+                // The compose stack lives in the current worktree (each
+                // worktree has its own project name + bind mount), not the
+                // main repo. Tracking-file sharing across worktrees is a
+                // separate concern handled by SessionTracker below.
+                composeProjectPath: base_path(),
             );
         });
 

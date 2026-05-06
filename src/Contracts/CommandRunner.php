@@ -36,4 +36,16 @@ interface CommandRunner
      * container-side path (defaults to /var/www/html).
      */
     public function workingDirectory(?string $hostPath = null): ?string;
+
+    /**
+     * Translate a host path to its equivalent in the runner's execution
+     * environment. Native: identity. Docker: rewrites paths under the
+     * compose project root to the container's bind-mount target so that
+     * commands carrying absolute paths (script paths, prompt files, log
+     * paths) resolve correctly when run inside the service.
+     *
+     * Paths outside the bind mount are returned unchanged — the caller
+     * is expected to keep agent-relevant files within the project tree.
+     */
+    public function translatePath(string $hostPath): string;
 }

@@ -38,3 +38,59 @@ test('TmuxManager start uses container workingDir for -c flag', function () {
     // but we can confirm the runner translates the host path.
     expect($runner->workingDirectory('/host/path'))->toBe('/var/www/html');
 });
+
+test('translatePath rewrites paths under composeProjectPath to containerWorkingDir', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        containerWorkingDir: '/var/www/html',
+        composeProjectPath: '/Volumes/Dev/hungryport/app-375',
+    );
+
+    expect($runner->translatePath('/Volumes/Dev/hungryport/app-375/vendor/woda/laravel-ralph/scripts/ralph-loop.cjs'))
+        ->toBe('/var/www/html/vendor/woda/laravel-ralph/scripts/ralph-loop.cjs')
+        ->and($runner->translatePath('/Volumes/Dev/hungryport/app-375/storage/ralph-logs/prompt-375.md'))
+        ->toBe('/var/www/html/storage/ralph-logs/prompt-375.md');
+});
+
+test('translatePath returns the project root mapped to the container root', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        containerWorkingDir: '/var/www/html',
+        composeProjectPath: '/Volumes/Dev/hungryport/app-375',
+    );
+
+    expect($runner->translatePath('/Volumes/Dev/hungryport/app-375'))->toBe('/var/www/html');
+});
+
+test('translatePath leaves paths outside the project root unchanged', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        containerWorkingDir: '/var/www/html',
+        composeProjectPath: '/Volumes/Dev/hungryport/app-375',
+    );
+
+    expect($runner->translatePath('/tmp/somewhere/else.md'))->toBe('/tmp/somewhere/else.md')
+        ->and($runner->translatePath('/Volumes/Dev/hungryport/app-other/foo'))
+        ->toBe('/Volumes/Dev/hungryport/app-other/foo');
+});
+
+test('translatePath is identity when composeProjectPath is null', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        containerWorkingDir: '/var/www/html',
+        composeProjectPath: null,
+    );
+
+    expect($runner->translatePath('/anywhere'))->toBe('/anywhere');
+});
+
+test('translatePath tolerates a trailing slash on composeProjectPath', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        containerWorkingDir: '/var/www/html/',
+        composeProjectPath: '/Volumes/Dev/hungryport/app-375/',
+    );
+
+    expect($runner->translatePath('/Volumes/Dev/hungryport/app-375/storage/ralph-logs/foo.log'))
+        ->toBe('/var/www/html/storage/ralph-logs/foo.log');
+});

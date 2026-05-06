@@ -35,7 +35,38 @@
   mode the host only needs `docker`; node/claude/screen/tmux live in the
   container. The compose service is also asserted as running.
 
+### Fixed
+
+- **Docker mode: detached sessions died immediately because the loop
+  command was built with host paths.** `StartCommand` baked
+  `cd <hostPath>` plus host-path `node <scriptPath>`, `--prompt
+  <hostPath>`, and `--log-path <hostPath>` into the shell command run
+  by the SessionManager — under docker mode that command runs inside
+  the agent service via `docker compose exec`, where host paths like
+  `/Volumes/...` do not exist. The session would start, bash would
+  fail at `cd`, and the tmux/screen session would exit before the loop
+  ever spawned. Fixed by adding `CommandRunner::translatePath()` that
+  rewrites paths under the compose project root to the container's
+  bind-mount target (`/var/www/html` by default); `StartCommand` now
+  translates `workingDir`, `scriptPath`, `prompt`, `logPath`, and
+  `AGENT_LOG_DIR` for session mode. `--once` (foreground host mode)
+  is unaffected.
+- **Docker mode: `composeProjectPath` pointed at the main worktree
+  root, not the current worktree.** In a sail-style multi-worktree
+  setup each worktree has its own compose project (different name,
+  different bind mount), so `docker compose exec` must run from the
+  worktree's directory. The provider was using
+  `resolveMainWorktreeRoot()` (correct for sharing a tracking file
+  across worktrees, wrong for compose targeting). Switched the docker
+  runner to `base_path()` while keeping the tracking-file lookup
+  unchanged.
+
 ### Changed
+
+- **`Contracts\CommandRunner` adds `translatePath(string): string`.**
+  `NativeCommandRunner` returns the path unchanged; `DockerCommandRunner`
+  rewrites paths under `composeProjectPath` to `containerWorkingDir`.
+  Implementers outside the package must add this method.
 
 - **Speckit mode prompt**: iterates over a phase rather than a single task. The
   first iteration's instruction block now tells the agent to work within the

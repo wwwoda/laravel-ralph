@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
+use Woda\Ralph\Contracts\CommandRunner;
 use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\RalphLogger;
 use Woda\Ralph\SessionTracker;
@@ -61,7 +62,7 @@ SUFFIX;
     /** @var array<string, mixed> */
     private array $promptSource = [];
 
-    public function handle(SessionTracker $tracker, SessionManager $sessionManager): int
+    public function handle(SessionTracker $tracker, SessionManager $sessionManager, CommandRunner $runner): int
     {
         if ($this->option('fresh') && $this->option('resume')) {
             $this->components->error('--fresh and --resume are mutually exclusive.');
@@ -110,15 +111,15 @@ SUFFIX;
         $logger->info("Permission mode: {$permissionMode}");
         $logger->info("Working dir: {$workingDir}");
 
-        // Build the ralph-loop command
         /** @var string|null $configScriptPath */
         $configScriptPath = config('ralph.script_path');
         $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
-        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
-        $logger->debug("Loop command: {$loopCmd}");
 
-        // Foreground (--once) mode
+        // Foreground (--once) mode runs on the host; use host paths verbatim.
         if ($this->option('once')) {
+            $hostLoopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
+            $logger->debug("Loop command: {$hostLoopCmd}");
+
             $this->components->info("Running single iteration for '{$name}'...");
 
             $process = Process::path($workingDir)
@@ -129,22 +130,37 @@ SUFFIX;
                 $process = $process->tty();
             }
 
-            $result = $process->run($loopCmd);
+            $result = $process->run($hostLoopCmd);
 
             return $result->exitCode() ?? self::FAILURE;
         }
 
-        // Detached session mode
+        // Detached session mode: paths bake into a command that the
+        // SessionManager runs through the CommandRunner — under docker
+        // mode that's `docker compose exec` into the agent service, so
+        // every absolute path must point at its container-side equivalent.
         if ($tracker->isRunning($name)) {
             $this->components->error("Session '{$name}' is already running.");
 
             return self::FAILURE;
         }
 
+        $loopCmd = $this->buildLoopCommand(
+            $runner->translatePath($scriptPath),
+            $runner->translatePath($prompt),
+            $name,
+            $iterations,
+            $sessionId,
+            $runner->translatePath($logger->path()),
+            $permissionMode,
+        );
+        $logger->debug("Loop command: {$loopCmd}");
+
         $this->components->info("Starting ralph session '{$name}'...");
 
-        $envExports = $this->buildEnvExportString();
-        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$workingDir}", $loopCmd]);
+        $envExports = $this->buildEnvExportString($runner);
+        $sessionWorkingDir = $runner->translatePath($workingDir);
+        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$sessionWorkingDir}", $loopCmd]);
         $sessionCmd = implode(' && ', $parts);
 
         $sessionManager->start($name, $sessionCmd, $workingDir);
@@ -737,10 +753,20 @@ SUFFIX;
         ]);
     }
 
-    private function buildEnvExportString(): string
+    private function buildEnvExportString(CommandRunner $runner): string
     {
+        $env = $this->buildEnv();
+
+        // AGENT_LOG_DIR is the only path-bearing env var consumed by the
+        // loop. Translate so a host path doesn't leak into the container
+        // shell (the loop also gets --log-path explicitly translated, so
+        // this is belt-and-braces).
+        if (isset($env['AGENT_LOG_DIR'])) {
+            $env['AGENT_LOG_DIR'] = $runner->translatePath($env['AGENT_LOG_DIR']);
+        }
+
         $exports = [];
-        foreach ($this->buildEnv() as $key => $value) {
+        foreach ($env as $key => $value) {
             $exports[] = sprintf('export %s=%s', $key, escapeshellarg($value));
         }
 

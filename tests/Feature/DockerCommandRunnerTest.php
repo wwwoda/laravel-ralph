@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Process\PendingProcess;
+use Illuminate\Support\Facades\Process;
 use Woda\Ralph\DockerCommandRunner;
 use Woda\Ralph\TmuxManager;
 
@@ -93,4 +95,36 @@ test('translatePath tolerates a trailing slash on composeProjectPath', function 
 
     expect($runner->translatePath('/Volumes/Dev/hungryport/app-375/storage/ralph-logs/foo.log'))
         ->toBe('/var/www/html/storage/ralph-logs/foo.log');
+});
+
+test('buildInteractive pins compose to the project directory when known', function () {
+    $runner = new DockerCommandRunner(
+        service: 'agent',
+        composeProjectPath: '/Volumes/Dev/hungryport/app-375',
+    );
+
+    $cmd = $runner->buildInteractive('tmux attach -t ralph-375');
+
+    expect($cmd)->toBe("docker compose --project-directory '/Volumes/Dev/hungryport/app-375' exec -it 'agent' tmux attach -t ralph-375");
+});
+
+test('run passes the working directory to docker compose exec via -w', function () {
+    Process::fake();
+
+    $runner = new DockerCommandRunner(service: 'agent', composeProjectPath: '/host/project');
+
+    $runner->run('screen -ls', '/var/www/html');
+
+    Process::assertRan(fn (PendingProcess $process) => $process->command === "docker compose exec -T -w '/var/www/html' 'agent' sh -c 'screen -ls'"
+        && $process->path === '/host/project');
+});
+
+test('run omits -w when no working directory is given', function () {
+    Process::fake();
+
+    $runner = new DockerCommandRunner(service: 'agent');
+
+    $runner->run('screen -ls');
+
+    Process::assertRan(fn (PendingProcess $process) => $process->command === "docker compose exec -T 'agent' sh -c 'screen -ls'");
 });

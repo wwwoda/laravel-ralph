@@ -37,6 +37,14 @@
 
 ### Fixed
 
+- **Docker mode**: `--once` no longer requires Docker — it runs on the host,
+  so host `node`/`claude` are validated instead. Startup now also verifies
+  `node`, `claude`, and the configured session-manager binary exist *inside*
+  the compose service. `DockerCommandRunner::run()` honours `$workingDir` via
+  `docker compose exec -w` (screen has no `-c`, unlike tmux), and
+  `buildInteractive()` pins `--project-directory` so `ralph:attach` works from
+  any cwd.
+
 - **Docker mode: detached sessions died immediately because the loop
   command was built with host paths.** `StartCommand` baked
   `cd <hostPath>` plus host-path `node <scriptPath>`, `--prompt

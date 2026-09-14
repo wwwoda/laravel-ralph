@@ -33,7 +33,8 @@ class DockerCommandRunner implements CommandRunner
         }
 
         $wrapped = sprintf(
-            'docker compose exec -T %s sh -c %s',
+            'docker compose exec -T%s %s sh -c %s',
+            $this->workdirFlag($workingDir),
             escapeshellarg($this->service),
             escapeshellarg($command),
         );
@@ -43,11 +44,32 @@ class DockerCommandRunner implements CommandRunner
 
     public function buildInteractive(string $command): string
     {
+        // The user may run this from anywhere on the host, so pin compose to
+        // the project dir instead of relying on the caller's cwd.
+        $projectFlag = $this->composeProjectPath !== null
+            ? ' --project-directory '.escapeshellarg($this->composeProjectPath)
+            : '';
+
         return sprintf(
-            'docker compose exec -it %s %s',
+            'docker compose%s exec -it %s %s',
+            $projectFlag,
             escapeshellarg($this->service),
             $command,
         );
+    }
+
+    /**
+     * `-w <dir>` for `docker compose exec`, or '' when no working dir was
+     * requested. Screen (unlike tmux) has no -c flag, so the session's cwd
+     * has to come from exec itself.
+     */
+    private function workdirFlag(?string $workingDir): string
+    {
+        if ($workingDir === null || $workingDir === '') {
+            return '';
+        }
+
+        return ' -w '.escapeshellarg($workingDir);
     }
 
     public function workingDirectory(?string $hostPath = null): ?string

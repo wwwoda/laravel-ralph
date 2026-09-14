@@ -833,7 +833,9 @@ SUFFIX;
 
     private function validateEnvironment(): bool
     {
-        $dockerMode = $this->isDockerModeActive();
+        // --once runs the loop on the host regardless of docker mode, so it
+        // needs the host binaries, not the container.
+        $dockerMode = $this->isDockerModeActive() && ! $this->option('once');
 
         $missing = [];
 
@@ -860,6 +862,31 @@ SUFFIX;
 
             if (! $check->successful()) {
                 $this->components->error("Docker mode is on but compose service '{$service}' is not running. Bring the stack up with `docker compose up -d`.");
+
+                return false;
+            }
+
+            // The detached command runs node + claude + the session manager
+            // inside the service; a running but incomplete image would only
+            // fail once the session starts.
+            /** @var string $manager */
+            $manager = config('ralph.session.manager', 'screen');
+            $required = ['node', 'claude', $manager === 'tmux' ? 'tmux' : 'screen'];
+
+            foreach ($required as $binary) {
+                $result = Process::path(base_path())->run(sprintf(
+                    'docker compose exec -T %s sh -c %s',
+                    escapeshellarg($service),
+                    escapeshellarg("command -v {$binary}"),
+                ));
+
+                if (! $result->successful()) {
+                    $missing[] = $binary;
+                }
+            }
+
+            if ($missing !== []) {
+                $this->components->error("Missing required binaries in compose service '{$service}': ".implode(', ', $missing));
 
                 return false;
             }

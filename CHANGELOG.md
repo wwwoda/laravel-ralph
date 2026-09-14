@@ -63,9 +63,12 @@
 
 ### Changed
 
-- **Minimum PHP is now 8.3** (`composer.json` `php: ^8.3`; CI matrix drops 8.2).
-  `systemsdk/phpcpd ^8.0` requires PHP >= 8.3, so dependency resolution on
-  8.2 was impossible and CI had never passed.
+- **Minimum PHP is now 8.3, Laravel 12 only** (`composer.json` `php: ^8.3`,
+  `illuminate/*: ^12.0`, `orchestra/testbench: ^10.0`; CI matrix drops PHP 8.2
+  and Laravel 11). `systemsdk/phpcpd ^8.0` requires PHP >= 8.3, and Composer
+  2.10 refuses every Laravel 11 release over unpatched security advisories
+  (L11 security support ended 2026-03), so those matrix legs could never
+  resolve and CI had never passed.
 
 - **`Contracts\CommandRunner` adds `translatePath(string): string`.**
   `NativeCommandRunner` returns the path unchanged; `DockerCommandRunner`

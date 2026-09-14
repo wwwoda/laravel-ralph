@@ -5,7 +5,7 @@ Claude Code agent loop runner for Laravel. Runs Claude CLI iteratively in a GNU 
 ## Requirements
 
 - PHP 8.3+
-- Laravel 11 or 12
+- Laravel 12
 - Node.js
 - [Claude CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude` in PATH)
 - GNU `screen` (not needed with `--once`)

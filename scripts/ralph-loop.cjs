@@ -8,7 +8,7 @@
  *
  * Usage:
  *   node ralph-loop.js --prompt <file-or-text> --iterations <n> --name <name>
- *     [--permission-mode <mode>] [--model <model>] [--session-id <uuid>]
+ *     [--permission-mode <mode>] [--model <model>] [--effort <level>] [--session-id <uuid>]
  *     [--budget <amount>] [--fresh]
  *
  * Environment:
@@ -38,6 +38,7 @@ function parseArgs() {
     name: "ralph",
     permissionMode: "acceptEdits",
     model: null,
+    effort: null,
     sessionId: null,
     budget: null,
     fresh: false,
@@ -68,6 +69,9 @@ function parseArgs() {
         break;
       case "--model":
         parsed.model = args[++i];
+        break;
+      case "--effort":
+        parsed.effort = args[++i];
         break;
       case "--session-id":
         parsed.sessionId = args[++i];
@@ -322,6 +326,10 @@ function buildClaudeArgs(config, prompt, iteration) {
     commonArgs.push("--model", config.model);
   }
 
+  if (config.effort) {
+    commonArgs.push("--effort", config.effort);
+  }
+
   if (config.budget) {
     commonArgs.push("--max-budget-usd", config.budget);
   }
@@ -398,6 +406,7 @@ async function main() {
   logger.info(`Iterations: ${config.iterations}`);
   logger.info(`Permission mode: ${config.permissionMode}`);
   logger.info(`Model: ${config.model || "default"}`);
+  logger.info(`Effort: ${config.effort || "default"}`);
   logger.info(`Session ID: ${config.sessionId || "none"}`);
   logger.info(`Resume: ${resumeMode ? "enabled" : "disabled"}`);
   logger.info(`Max consecutive failures: ${config.maxConsecutiveFailures}`);
@@ -452,6 +461,7 @@ async function main() {
 
           const freshArgs = ["-p", fullPrompt, "--verbose", "--output-format", "stream-json", "--permission-mode", config.permissionMode];
           if (config.model) freshArgs.push("--model", config.model);
+          if (config.effort) freshArgs.push("--effort", config.effort);
           if (config.budget) freshArgs.push("--max-budget-usd", config.budget);
 
           const retryResult = await runClaude(freshArgs, logger, config.nonJsonWarnThreshold);

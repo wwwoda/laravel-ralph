@@ -33,6 +33,7 @@ test('track writes session entry to file', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'test-uuid-1234',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-test-session',
     ]);
@@ -53,6 +54,7 @@ test('untrack removes session entry', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'uuid-1',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-session-1',
     ]);
@@ -69,6 +71,7 @@ test('running filters to only sessions that are alive', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'uuid-alive',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-alive',
     ]);
@@ -79,6 +82,7 @@ test('running filters to only sessions that are alive', function () {
         'working_path' => '/tmp/test2',
         'session_id' => 'uuid-dead',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-dead',
     ]);
@@ -101,6 +105,7 @@ test('clean removes dead entries', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'uuid-alive',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-alive',
     ]);
@@ -111,6 +116,7 @@ test('clean removes dead entries', function () {
         'working_path' => '/tmp/test2',
         'session_id' => 'uuid-dead',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-dead',
     ]);
@@ -134,6 +140,7 @@ test('isRunning checks session manager', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'uuid-test',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-test',
     ]);
@@ -152,6 +159,7 @@ test('get returns session data or null', function () {
         'working_path' => '/tmp/test',
         'session_id' => 'uuid-test',
         'model' => null,
+        'effort' => null,
         'iterations' => 5,
         'screen_name' => 'ralph-test',
     ]);
@@ -160,4 +168,20 @@ test('get returns session data or null', function () {
         ->and($this->tracker->get('test')['name'])->toBe('test')
         ->and($this->tracker->get('test')['session_id'])->toBe('uuid-test')
         ->and($this->tracker->get('nonexistent'))->toBeNull();
+});
+
+test('track round-trips a non-null effort', function () {
+    $this->tracker->track('effort-session', [
+        'name' => 'effort-session',
+        'prompt_source' => 'test.md',
+        'working_path' => '/tmp/test',
+        'session_id' => 'uuid-effort',
+        'model' => 'opus',
+        'effort' => 'xhigh',
+        'iterations' => 5,
+        'screen_name' => 'ralph-effort-session',
+    ]);
+
+    expect($this->tracker->get('effort-session')['effort'])->toBe('xhigh')
+        ->and($this->tracker->get('effort-session')['model'])->toBe('opus');
 });

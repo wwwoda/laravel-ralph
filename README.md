@@ -52,6 +52,7 @@ php artisan ralph:start --once --prompt="Fix the failing tests"
 | `--prompt=TEXT\|FILE` | Inline prompt or path to prompt file |
 | `--iterations=N` | Max iterations (default: 30) |
 | `--model=MODEL` | Override Claude model |
+| `--effort=LEVEL` | Override Claude effort level (`low`, `medium`, `high`, `xhigh`, `max`) |
 | `--budget=USD` | Max spend per Claude invocation |
 | `--fresh` | Don't resume — each iteration is independent |
 | `--resume` | Resume a previous session |
@@ -94,6 +95,7 @@ php artisan vendor:publish --tag=ralph-config
     'default_iterations'       => env('RALPH_LOOP_ITERATIONS', 30),
     'permission_mode'          => env('RALPH_PERMISSION_MODE', 'acceptEdits'),
     'model'                    => env('RALPH_MODEL'),
+    'effort'                   => env('RALPH_EFFORT'),
     'completion_marker'        => '<promise>COMPLETE</promise>',
     'max_consecutive_failures' => env('RALPH_MAX_CONSECUTIVE_FAILURES', 3),
 ],

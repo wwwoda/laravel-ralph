@@ -63,6 +63,10 @@
 
 ### Changed
 
+- **Minimum PHP is now 8.3** (`composer.json` `php: ^8.3`; CI matrix drops 8.2).
+  `systemsdk/phpcpd ^8.0` requires PHP >= 8.3, so dependency resolution on
+  8.2 was impossible and CI had never passed.
+
 - **`Contracts\CommandRunner` adds `translatePath(string): string`.**
   `NativeCommandRunner` returns the path unchanged; `DockerCommandRunner`
   rewrites paths under `composeProjectPath` to `containerWorkingDir`.

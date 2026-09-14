@@ -11,6 +11,7 @@ return [
         'default_iterations' => (int) env('RALPH_LOOP_ITERATIONS', 30),
         'permission_mode' => env('RALPH_PERMISSION_MODE', 'acceptEdits'),
         'model' => env('RALPH_MODEL'),
+        'effort' => env('RALPH_EFFORT'),
         'completion_marker' => '<promise>COMPLETE</promise>',
         'max_consecutive_failures' => (int) env('RALPH_MAX_CONSECUTIVE_FAILURES', 3),
     ],

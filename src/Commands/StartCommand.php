@@ -25,6 +25,7 @@ class StartCommand extends Command
         {--prompt= : Path to prompt file or inline text}
         {--iterations= : Max iterations}
         {--model= : Override Claude model}
+        {--effort= : Override Claude effort level (low, medium, high, xhigh, max)}
         {--budget= : Max USD per Claude invocation}
         {--fresh : Each iteration starts a fresh Claude session}
         {--resume : Resume a previously stopped session}
@@ -36,6 +37,8 @@ class StartCommand extends Command
     protected $description = 'Start a Ralph agent loop';
 
     private const VALID_PERMISSION_MODES = ['acceptEdits', 'auto', 'dontAsk', 'bypassPermissions'];
+
+    private const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
     private const PERMISSION_MODE_ALIASES = [
         'danger' => 'bypassPermissions',
@@ -75,6 +78,12 @@ SUFFIX;
             return self::FAILURE;
         }
 
+        // Validate before any tmux/docker work so a typo fails here, not
+        // 30 iterations later.
+        if (! $this->validateEffort()) {
+            return self::FAILURE;
+        }
+
         if (! $this->validateEnvironment()) {
             return self::FAILURE;
         }
@@ -99,6 +108,7 @@ SUFFIX;
 
         $workingDir = base_path();
         $model = $this->resolveModel();
+        $effort = $this->resolveEffort();
 
         // Create logger and write startup info
         $logger = $this->createSessionLogger($name);
@@ -107,6 +117,7 @@ SUFFIX;
         $logger->info("Session ID: {$sessionId}");
         $logger->info("Iterations: {$iterations}");
         $logger->info('Model: '.($model ?? 'default'));
+        $logger->info('Effort: '.($effort ?? 'default'));
         $logger->info('Mode: '.($this->option('fresh') ? 'fresh' : 'resume'));
         $logger->info("Permission mode: {$permissionMode}");
         $logger->info("Working dir: {$workingDir}");
@@ -171,6 +182,7 @@ SUFFIX;
             'working_path' => $workingDir,
             'session_id' => $sessionId,
             'model' => $model,
+            'effort' => $effort,
             'iterations' => $iterations,
             'screen_name' => $sessionManager->fullName($name),
         ]);
@@ -713,6 +725,40 @@ SUFFIX;
         return is_string($configModel) && $configModel !== '' ? $configModel : null;
     }
 
+    /**
+     * Option > config > null (Claude default). Not validated here — see
+     * validateEffort(), which runs once at the top of handle().
+     */
+    private function resolveEffort(): ?string
+    {
+        $effort = $this->option('effort');
+        if (is_string($effort) && $effort !== '') {
+            return $effort;
+        }
+
+        /** @var string|null $configEffort */
+        $configEffort = config('ralph.loop.effort');
+
+        return is_string($configEffort) && $configEffort !== '' ? $configEffort : null;
+    }
+
+    private function validateEffort(): bool
+    {
+        $effort = $this->resolveEffort();
+
+        if ($effort === null || in_array($effort, self::EFFORT_LEVELS, true)) {
+            return true;
+        }
+
+        $this->components->error(sprintf(
+            "Unknown effort level '%s'. Expected one of: %s",
+            $effort,
+            implode(', ', self::EFFORT_LEVELS),
+        ));
+
+        return false;
+    }
+
     private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath, string $permissionMode): string
     {
         $cmd = sprintf(
@@ -729,6 +775,11 @@ SUFFIX;
         $model = $this->resolveModel();
         if (is_string($model)) {
             $cmd .= ' --model '.escapeshellarg($model);
+        }
+
+        $effort = $this->resolveEffort();
+        if (is_string($effort)) {
+            $cmd .= ' --effort '.escapeshellarg($effort);
         }
 
         $budget = $this->option('budget');

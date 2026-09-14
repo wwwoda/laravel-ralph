@@ -1,7 +1,9 @@
 <?php
 
+use Illuminate\Process\PendingProcess;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Woda\Ralph\SessionTracker;
 
 test('ralph:status shows empty when no sessions tracked', function () {
     $this->artisan('ralph:status')
@@ -183,4 +185,83 @@ test('speckit prompt references spec files relative to base_path', function () {
 
     File::deleteDirectory(base_path('specs'));
     File::deleteDirectory($logDir);
+});
+
+test('ralph:start rejects an unknown effort level before touching the environment', function () {
+    Process::fake();
+
+    $this->artisan('ralph:start --effort=bogus --once --prompt "test" test-session')
+        ->expectsOutputToContain("Unknown effort level 'bogus'. Expected one of: low, medium, high, xhigh, max")
+        ->assertExitCode(1);
+
+    Process::assertNotRan(fn (PendingProcess $p) => str_contains($p->command, 'which ') || str_contains($p->command, 'ralph-loop.cjs'));
+});
+
+test('ralph:start rejects an unknown effort level from config', function () {
+    config()->set('ralph.loop.effort', 'bogus');
+    Process::fake();
+
+    $this->artisan('ralph:start --once --prompt "test" test-session')
+        ->expectsOutputToContain("Unknown effort level 'bogus'")
+        ->assertExitCode(1);
+});
+
+test('ralph:start --effort is passed to the loop command', function () {
+    Process::fake();
+
+    $this->artisan('ralph:start --effort=high --once --prompt "test" test-session');
+
+    Process::assertRan(fn (PendingProcess $process) => str_contains($process->command, "--effort 'high'"));
+});
+
+test('ralph:start uses RALPH_EFFORT config when the option is absent', function () {
+    config()->set('ralph.loop.effort', 'low');
+    Process::fake();
+
+    $this->artisan('ralph:start --once --prompt "test" test-session');
+
+    Process::assertRan(fn (PendingProcess $process) => str_contains($process->command, "--effort 'low'"));
+});
+
+test('ralph:start omits --effort when neither option nor config is set', function () {
+    config()->set('ralph.loop.effort', null);
+    Process::fake();
+
+    $this->artisan('ralph:start --once --prompt "test" test-session');
+
+    Process::assertRan(fn (PendingProcess $process) => str_contains($process->command, 'ralph-loop.cjs') && ! str_contains($process->command, '--effort'));
+});
+
+test('ralph:status shows effort column with default for older entries', function () {
+    /** @var SessionTracker $tracker */
+    $tracker = app(SessionTracker::class);
+
+    $tracker->track('with-effort', [
+        'name' => 'with-effort',
+        'prompt_source' => 'test.md',
+        'working_path' => '/tmp/test',
+        'session_id' => 'uuid-1',
+        'model' => 'opus',
+        'effort' => 'xhigh',
+        'iterations' => 5,
+        'screen_name' => 'ralph-with-effort',
+    ]);
+    $tracker->track('legacy', [
+        'name' => 'legacy',
+        'prompt_source' => 'test.md',
+        'working_path' => '/tmp/test',
+        'session_id' => 'uuid-2',
+        'model' => null,
+        'iterations' => 5,
+        'screen_name' => 'ralph-legacy',
+    ]);
+
+    $this->artisan('ralph:status')
+        ->expectsOutputToContain('Effort')
+        ->expectsOutputToContain('xhigh')
+        ->expectsOutputToContain('default')
+        ->assertExitCode(0);
+
+    $tracker->untrack('with-effort');
+    $tracker->untrack('legacy');
 });

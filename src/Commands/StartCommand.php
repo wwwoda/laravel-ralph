@@ -457,9 +457,9 @@ SUFFIX;
         $projectMd = $prdPath.'/'.$selected.'/project.md';
         $progressMd = $prdPath.'/'.$selected.'/progress.md';
 
-        $content = "@{$projectMd}";
+        $content = $this->fileRef($projectMd);
         if (File::exists($progressMd)) {
-            $content .= "\n\n@{$progressMd}";
+            $content .= "\n\n".$this->fileRef($progressMd);
         }
 
         return [
@@ -577,6 +577,24 @@ SUFFIX;
             ->all();
     }
 
+    /**
+     * `@<path>` reference for the prompt, relative to base_path(). The loop
+     * cd's into the working dir before running claude, so relative refs
+     * resolve on the host and inside a docker service alike — absolute host
+     * paths would not exist in the container.
+     */
+    private function fileRef(string $path): string
+    {
+        return '@'.$this->relativeToBase($path);
+    }
+
+    private function relativeToBase(string $path): string
+    {
+        $base = rtrim(base_path(), '/').'/';
+
+        return str_starts_with($path, $base) ? substr($path, strlen($base)) : $path;
+    }
+
     private function buildSpeckitPrompt(string $specDir, bool $isContinuation = false): string
     {
         $progressPath = $specDir.'/progress.md';
@@ -607,11 +625,11 @@ SUFFIX;
             }
         }
 
-        $fileRefs = implode("\n", array_map(fn (string $f): string => "@{$f}", $files));
+        $fileRefs = implode("\n", array_map(fn (string $f): string => $this->fileRef($f), $files));
 
         $progressNote = $progressExists
             ? 'Read progress.md FIRST — `## Codebase Patterns` (top) captures conventions discovered in earlier iterations. Then read tasks.md.'
-            : "progress.md does not yet exist at {$progressPath}. Create it after this iteration with a `## Codebase Patterns` section (top) and one `## Iteration 1 — <timestamp>` entry (bottom).";
+            : 'progress.md does not yet exist at '.$this->relativeToBase($progressPath).'. Create it after this iteration with a `## Codebase Patterns` section (top) and one `## Iteration 1 — <timestamp>` entry (bottom).';
 
         if ($isContinuation) {
             return <<<PROMPT

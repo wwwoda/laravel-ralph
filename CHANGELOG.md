@@ -44,6 +44,10 @@
   `docker compose exec -w` (screen has no `-c`, unlike tmux), and
   `buildInteractive()` pins `--project-directory` so `ralph:attach` works from
   any cwd.
+- **Prompt `@file` references are now relative to `base_path()`** (PRD and
+  Spec Kit prompts). The loop `cd`s into the working dir before running
+  claude, so relative refs resolve on the host and inside a docker service;
+  absolute host paths did not exist in the container.
 
 - **Docker mode: detached sessions died immediately because the loop
   command was built with host paths.** `StartCommand` baked

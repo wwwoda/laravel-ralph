@@ -160,3 +160,27 @@ test('ralph:start in docker mode fails when the service lacks node or claude', f
         ->expectsOutputToContain("Missing required binaries in compose service 'agent': claude, tmux")
         ->assertExitCode(1);
 });
+
+test('speckit prompt references spec files relative to base_path', function () {
+    $specDir = base_path('specs/001-demo');
+    File::ensureDirectoryExists($specDir);
+    File::put($specDir.'/tasks.md', "- [ ] task\n");
+    File::put($specDir.'/plan.md', "plan\n");
+
+    /** @var string $logDir */
+    $logDir = config('ralph.logging.directory');
+    File::deleteDirectory($logDir);
+
+    Process::fake();
+
+    $this->artisan('ralph:start demo --speckit=001-demo --once');
+
+    $prompt = File::get($logDir.'/prompt-demo.md');
+
+    expect($prompt)->toContain("@specs/001-demo/tasks.md\n@specs/001-demo/plan.md")
+        ->and($prompt)->toContain('does not yet exist at specs/001-demo/progress.md')
+        ->and($prompt)->not->toContain('@'.base_path());
+
+    File::deleteDirectory(base_path('specs'));
+    File::deleteDirectory($logDir);
+});

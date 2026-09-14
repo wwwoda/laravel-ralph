@@ -3,6 +3,7 @@
 use Illuminate\Process\PendingProcess;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
+use Woda\Ralph\SessionTracker;
 
 test('ralph:status shows empty when no sessions tracked', function () {
     $this->artisan('ralph:status')
@@ -229,4 +230,38 @@ test('ralph:start omits --effort when neither option nor config is set', functio
     $this->artisan('ralph:start --once --prompt "test" test-session');
 
     Process::assertRan(fn (PendingProcess $process) => str_contains($process->command, 'ralph-loop.cjs') && ! str_contains($process->command, '--effort'));
+});
+
+test('ralph:status shows effort column with default for older entries', function () {
+    /** @var SessionTracker $tracker */
+    $tracker = app(SessionTracker::class);
+
+    $tracker->track('with-effort', [
+        'name' => 'with-effort',
+        'prompt_source' => 'test.md',
+        'working_path' => '/tmp/test',
+        'session_id' => 'uuid-1',
+        'model' => 'opus',
+        'effort' => 'xhigh',
+        'iterations' => 5,
+        'screen_name' => 'ralph-with-effort',
+    ]);
+    $tracker->track('legacy', [
+        'name' => 'legacy',
+        'prompt_source' => 'test.md',
+        'working_path' => '/tmp/test',
+        'session_id' => 'uuid-2',
+        'model' => null,
+        'iterations' => 5,
+        'screen_name' => 'ralph-legacy',
+    ]);
+
+    $this->artisan('ralph:status')
+        ->expectsOutputToContain('Effort')
+        ->expectsOutputToContain('xhigh')
+        ->expectsOutputToContain('default')
+        ->assertExitCode(0);
+
+    $tracker->untrack('with-effort');
+    $tracker->untrack('legacy');
 });

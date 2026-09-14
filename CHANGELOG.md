@@ -9,7 +9,8 @@
   passed as `--effort` to every `claude` invocation in `ralph-loop.cjs`
   (first run, resume, and the fresh retry after a failed resume). Resolution
   mirrors `--model`: option > config > unset (Claude default). Logged as
-  `Effort:` next to `Model:` and persisted in the session tracker entry.
+  `Effort:` next to `Model:`, persisted in the session tracker entry, and shown
+  as an `Effort` column in `ralph:status` (`default` for older entries).
 
 - **Tmux support for detached sessions.** A new `SessionManager` contract
   (`Woda\Ralph\Contracts\SessionManager`) abstracts session-manager concerns.

@@ -55,6 +55,8 @@ class StatusCommand extends Command
             $sessionId = $agent['session_id'] ?? '-';
             /** @var string $model */
             $model = $agent['model'] ?? 'default';
+            /** @var string $effort */
+            $effort = $agent['effort'] ?? 'default';
             /** @var string $screenName */
             $screenName = $agent['screen_name'] ?? '-';
 
@@ -64,13 +66,14 @@ class StatusCommand extends Command
                 $workingPath,
                 strlen($sessionId) > 8 ? substr($sessionId, 0, 8) : $sessionId,
                 $model,
+                $effort,
                 $duration,
                 $screenName,
             ];
         }
 
         $this->table(
-            ['Name', 'Status', 'Path', 'SID', 'Model', 'Duration', 'Session'],
+            ['Name', 'Status', 'Path', 'SID', 'Model', 'Effort', 'Duration', 'Session'],
             $rows,
         );
 

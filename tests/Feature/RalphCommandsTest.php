@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
 
 test('ralph:status shows empty when no sessions tracked', function () {
     $this->artisan('ralph:status')
@@ -124,4 +125,62 @@ test('ralph:init fails on invalid existing json', function () {
 
     // Cleanup
     File::deleteDirectory($claudeDir);
+});
+
+test('ralph:start --once skips docker validation and checks host binaries', function () {
+    config()->set('ralph.docker.enabled', true);
+
+    Process::fake([
+        'which node' => Process::result(exitCode: 1),
+        'which claude' => Process::result(exitCode: 1),
+        '*' => Process::result(),
+    ]);
+
+    $this->artisan('ralph:start --once --prompt "test" test-session')
+        ->expectsOutputToContain('Missing required binaries: node, claude')
+        ->assertExitCode(1);
+
+    Process::assertNotRan('which docker');
+});
+
+test('ralph:start in docker mode fails when the service lacks node or claude', function () {
+    config()->set('ralph.docker.enabled', true);
+    config()->set('ralph.docker.service', 'agent');
+    config()->set('ralph.session.manager', 'tmux');
+
+    Process::fake([
+        'which docker' => Process::result(),
+        'docker compose ps *' => Process::result(),
+        "docker compose exec -T 'agent' sh -c 'command -v node'" => Process::result(),
+        "docker compose exec -T 'agent' sh -c 'command -v claude'" => Process::result(exitCode: 127),
+        "docker compose exec -T 'agent' sh -c 'command -v tmux'" => Process::result(exitCode: 127),
+    ]);
+
+    $this->artisan('ralph:start --prompt "test" test-session')
+        ->expectsOutputToContain("Missing required binaries in compose service 'agent': claude, tmux")
+        ->assertExitCode(1);
+});
+
+test('speckit prompt references spec files relative to base_path', function () {
+    $specDir = base_path('specs/001-demo');
+    File::ensureDirectoryExists($specDir);
+    File::put($specDir.'/tasks.md', "- [ ] task\n");
+    File::put($specDir.'/plan.md', "plan\n");
+
+    /** @var string $logDir */
+    $logDir = config('ralph.logging.directory');
+    File::deleteDirectory($logDir);
+
+    Process::fake();
+
+    $this->artisan('ralph:start demo --speckit=001-demo --once');
+
+    $prompt = File::get($logDir.'/prompt-demo.md');
+
+    expect($prompt)->toContain("@specs/001-demo/tasks.md\n@specs/001-demo/plan.md")
+        ->and($prompt)->toContain('does not yet exist at specs/001-demo/progress.md')
+        ->and($prompt)->not->toContain('@'.base_path());
+
+    File::deleteDirectory(base_path('specs'));
+    File::deleteDirectory($logDir);
 });

@@ -7,8 +7,9 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Process as SymfonyProcess;
+use Woda\Ralph\Contracts\CommandRunner;
+use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\RalphLogger;
-use Woda\Ralph\ScreenManager;
 use Woda\Ralph\SessionTracker;
 
 use function Laravel\Prompts\search;
@@ -27,7 +28,7 @@ class StartCommand extends Command
         {--budget= : Max USD per Claude invocation}
         {--fresh : Each iteration starts a fresh Claude session}
         {--resume : Resume a previously stopped session}
-        {--attach : Attach to screen session after starting}
+        {--attach : Attach to the session after starting}
         {--once : Run single iteration in foreground}
         {--speckit= : Spec Kit feature directory name (e.g. 349-multi-user-orgs). Omit value for interactive selection.}
         {--permission-mode= : Claude permission mode (auto, dontAsk, bypassPermissions, danger, dangerous)}';
@@ -42,18 +43,26 @@ class StartCommand extends Command
     ];
 
     private const SPECKIT_SUFFIX = <<<'SUFFIX'
-Complete exactly ONE task per iteration. After implementing:
-1. Mark it `- [x]` in tasks.md
+Read progress.md FIRST if it exists in the spec dir — the `## Codebase Patterns` section at the top captures conventions discovered in earlier iterations. Then read tasks.md and work within ONE phase this iteration.
+
+After implementing:
+1. Mark completed tasks `- [x]` in tasks.md
 2. Run relevant tests
-3. Commit with a descriptive message
-4. If ALL tasks are `- [x]`, output <promise>COMPLETE</promise>
-5. Otherwise STOP — the next iteration handles the next task
+3. Update progress.md:
+   - Curate `## Codebase Patterns` (top of file) with any new conventions. Keep it tight and deduplicated.
+   - Append one `## Iteration N — <timestamp>` entry at the bottom with tasks completed, files changed, and learnings.
+4. Commit when a logically separate changeset is complete. Floor: one commit per phase or user story (whichever is the smaller unit in this tasks.md). Ceiling: none — commit more when a sub-change is a coherent standalone unit (refactor, generated migration, etc.). No commit on partial phase progress unless the partial piece stands alone.
+   - Subject (Pro Git, <=50 chars, imperative): `feat(<feature>): Phase <N> — <title>` or `feat(<feature>): US<N> — <title>`
+   - Blank line, then 72-wrap body if needed.
+   - Reference: https://git-scm.com/book/en/v2/Distributed-Git-Contributing-to-a-Project
+5. If ALL tasks are `- [x]`, output <promise>COMPLETE</promise>
+6. Otherwise STOP — the next iteration handles the next phase.
 SUFFIX;
 
     /** @var array<string, mixed> */
     private array $promptSource = [];
 
-    public function handle(SessionTracker $tracker, ScreenManager $screenManager): int
+    public function handle(SessionTracker $tracker, SessionManager $sessionManager, CommandRunner $runner): int
     {
         if ($this->option('fresh') && $this->option('resume')) {
             $this->components->error('--fresh and --resume are mutually exclusive.');
@@ -102,15 +111,15 @@ SUFFIX;
         $logger->info("Permission mode: {$permissionMode}");
         $logger->info("Working dir: {$workingDir}");
 
-        // Build the ralph-loop command
         /** @var string|null $configScriptPath */
         $configScriptPath = config('ralph.script_path');
         $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
-        $loopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
-        $logger->debug("Loop command: {$loopCmd}");
 
-        // Foreground (--once) mode
+        // Foreground (--once) mode runs on the host; use host paths verbatim.
         if ($this->option('once')) {
+            $hostLoopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
+            $logger->debug("Loop command: {$hostLoopCmd}");
+
             $this->components->info("Running single iteration for '{$name}'...");
 
             $process = Process::path($workingDir)
@@ -121,25 +130,40 @@ SUFFIX;
                 $process = $process->tty();
             }
 
-            $result = $process->run($loopCmd);
+            $result = $process->run($hostLoopCmd);
 
             return $result->exitCode() ?? self::FAILURE;
         }
 
-        // Screen session mode
+        // Detached session mode: paths bake into a command that the
+        // SessionManager runs through the CommandRunner — under docker
+        // mode that's `docker compose exec` into the agent service, so
+        // every absolute path must point at its container-side equivalent.
         if ($tracker->isRunning($name)) {
             $this->components->error("Session '{$name}' is already running.");
 
             return self::FAILURE;
         }
 
+        $loopCmd = $this->buildLoopCommand(
+            $runner->translatePath($scriptPath),
+            $runner->translatePath($prompt),
+            $name,
+            $iterations,
+            $sessionId,
+            $runner->translatePath($logger->path()),
+            $permissionMode,
+        );
+        $logger->debug("Loop command: {$loopCmd}");
+
         $this->components->info("Starting ralph session '{$name}'...");
 
-        $envExports = $this->buildEnvExportString();
-        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$workingDir}", $loopCmd]);
-        $screenCmd = implode(' && ', $parts);
+        $envExports = $this->buildEnvExportString($runner);
+        $sessionWorkingDir = $runner->translatePath($workingDir);
+        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$sessionWorkingDir}", $loopCmd]);
+        $sessionCmd = implode(' && ', $parts);
 
-        $screenManager->start($name, $screenCmd, $workingDir);
+        $sessionManager->start($name, $sessionCmd, $workingDir);
 
         $tracker->track($name, [
             'name' => $name,
@@ -148,20 +172,20 @@ SUFFIX;
             'session_id' => $sessionId,
             'model' => $model,
             'iterations' => $iterations,
-            'screen_name' => $screenManager->fullName($name),
+            'screen_name' => $sessionManager->fullName($name),
         ]);
 
         $this->components->info("Session '{$name}' started.");
         $this->components->bulletList([
-            "Screen: {$screenManager->fullName($name)}",
+            "Session: {$sessionManager->fullName($name)}",
             "Working dir: {$workingDir}",
             "Iterations: {$iterations}",
             "Session ID: {$sessionId}",
         ]);
 
         if ($this->option('attach')) {
-            $attachCmd = $screenManager->attachCommand($name);
-            $this->components->info('Attaching to screen session...');
+            $attachCmd = $sessionManager->attachCommand($name);
+            $this->components->info('Attaching to session...');
             passthru($attachCmd);
         }
 
@@ -433,9 +457,9 @@ SUFFIX;
         $projectMd = $prdPath.'/'.$selected.'/project.md';
         $progressMd = $prdPath.'/'.$selected.'/progress.md';
 
-        $content = "@{$projectMd}";
+        $content = $this->fileRef($projectMd);
         if (File::exists($progressMd)) {
-            $content .= "\n\n@{$progressMd}";
+            $content .= "\n\n".$this->fileRef($progressMd);
         }
 
         return [
@@ -553,12 +577,37 @@ SUFFIX;
             ->all();
     }
 
+    /**
+     * `@<path>` reference for the prompt, relative to base_path(). The loop
+     * cd's into the working dir before running claude, so relative refs
+     * resolve on the host and inside a docker service alike — absolute host
+     * paths would not exist in the container.
+     */
+    private function fileRef(string $path): string
+    {
+        return '@'.$this->relativeToBase($path);
+    }
+
+    private function relativeToBase(string $path): string
+    {
+        $base = rtrim(base_path(), '/').'/';
+
+        return str_starts_with($path, $base) ? substr($path, strlen($base)) : $path;
+    }
+
     private function buildSpeckitPrompt(string $specDir, bool $isContinuation = false): string
     {
+        $progressPath = $specDir.'/progress.md';
+        $progressExists = File::exists($progressPath);
+
         $files = [
             $specDir.'/tasks.md',
             $specDir.'/plan.md',
         ];
+
+        if ($progressExists) {
+            array_unshift($files, $progressPath);
+        }
 
         foreach (['spec.md', 'data-model.md', 'research.md', 'quickstart.md'] as $optional) {
             $path = $specDir.'/'.$optional;
@@ -576,35 +625,43 @@ SUFFIX;
             }
         }
 
-        $fileRefs = implode("\n", array_map(fn (string $f): string => "@{$f}", $files));
+        $fileRefs = implode("\n", array_map(fn (string $f): string => $this->fileRef($f), $files));
+
+        $progressNote = $progressExists
+            ? 'Read progress.md FIRST — `## Codebase Patterns` (top) captures conventions discovered in earlier iterations. Then read tasks.md.'
+            : 'progress.md does not yet exist at '.$this->relativeToBase($progressPath).'. Create it after this iteration with a `## Codebase Patterns` section (top) and one `## Iteration 1 — <timestamp>` entry (bottom).';
 
         if ($isContinuation) {
             return <<<PROMPT
-            Continue implementing the Spec Kit feature. Find and implement the next incomplete task.
+            Continue implementing the Spec Kit feature. Work within the next incomplete phase.
 
             {$fileRefs}
 
-            Read tasks.md and find the FIRST `- [ ]` task. Implement it using the spec documents for context. Run tests, mark it `- [x]`, and commit. Output <promise>COMPLETE</promise> when zero incomplete tasks remain.
+            {$progressNote}
+
+            Find the FIRST phase in tasks.md with `- [ ]` tasks. Implement tasks within that phase, mark them `- [x]`, run tests, and update progress.md (curate patterns, append iteration entry). Commit when the phase (or a logically separate changeset within it) completes — Pro Git commit rules: https://git-scm.com/book/en/v2/Distributed-Git-Contributing-to-a-Project. Output <promise>COMPLETE</promise> when zero `- [ ]` tasks remain.
             PROMPT;
         }
 
         return <<<PROMPT
-        Implement the next incomplete task from the Spec Kit feature spec.
+        Implement the next incomplete phase of the Spec Kit feature.
 
         {$fileRefs}
 
         ## Instructions
 
-        1. Read tasks.md — find the FIRST task marked `- [ ]` (incomplete)
-        2. Read plan.md for architecture, tech stack, and file structure
-        3. If available, use spec.md for requirements and acceptance criteria
-        4. If available, use data-model.md for entity definitions
-        5. If available, use research.md for technical decisions
-        6. Implement that single task
-        7. Run tests relevant to the change
-        8. Mark the completed task `- [x]` in tasks.md
-        9. Commit your changes with a descriptive message
-        10. If zero `- [ ]` tasks remain in tasks.md, output <promise>COMPLETE</promise>
+        1. {$progressNote}
+        2. Read tasks.md — find the FIRST phase with `- [ ]` tasks. Work within that ONE phase this iteration.
+        3. Read plan.md for architecture, tech stack, and file structure
+        4. If available, use spec.md for requirements and acceptance criteria
+        5. If available, use data-model.md for entity definitions
+        6. If available, use research.md for technical decisions
+        7. Implement the tasks in that phase
+        8. Run tests relevant to the change
+        9. Mark completed tasks `- [x]` in tasks.md
+        10. Update progress.md: curate `## Codebase Patterns`, append an iteration entry with tasks done / files changed / learnings
+        11. Commit when the phase completes or when a logically separate changeset stands alone. Message: `feat(<feature>): Phase <N> — <title>` (50-char imperative subject, blank line, 72-wrap body). Pro Git rules: https://git-scm.com/book/en/v2/Distributed-Git-Contributing-to-a-Project
+        12. If zero `- [ ]` tasks remain in tasks.md, output <promise>COMPLETE</promise>
         PROMPT;
     }
 
@@ -714,10 +771,20 @@ SUFFIX;
         ]);
     }
 
-    private function buildEnvExportString(): string
+    private function buildEnvExportString(CommandRunner $runner): string
     {
+        $env = $this->buildEnv();
+
+        // AGENT_LOG_DIR is the only path-bearing env var consumed by the
+        // loop. Translate so a host path doesn't leak into the container
+        // shell (the loop also gets --log-path explicitly translated, so
+        // this is belt-and-braces).
+        if (isset($env['AGENT_LOG_DIR'])) {
+            $env['AGENT_LOG_DIR'] = $runner->translatePath($env['AGENT_LOG_DIR']);
+        }
+
         $exports = [];
-        foreach ($this->buildEnv() as $key => $value) {
+        foreach ($env as $key => $value) {
             $exports[] = sprintf('export %s=%s', $key, escapeshellarg($value));
         }
 
@@ -784,7 +851,66 @@ SUFFIX;
 
     private function validateEnvironment(): bool
     {
+        // --once runs the loop on the host regardless of docker mode, so it
+        // needs the host binaries, not the container.
+        $dockerMode = $this->isDockerModeActive() && ! $this->option('once');
+
         $missing = [];
+
+        // In docker mode the host only needs `docker`. node/claude/screen/tmux
+        // live inside the agent container.
+        if ($dockerMode) {
+            $result = Process::run('which docker');
+            if (! $result->successful()) {
+                $missing[] = 'docker';
+            }
+
+            if ($missing !== []) {
+                $this->components->error('Missing required binaries: '.implode(', ', $missing));
+
+                return false;
+            }
+
+            // Also verify the configured compose service is up.
+            /** @var string $service */
+            $service = config('ralph.docker.service', 'agent');
+            $check = Process::path(base_path())->run(
+                sprintf('docker compose ps --status running --services | grep -Fx %s', escapeshellarg($service)),
+            );
+
+            if (! $check->successful()) {
+                $this->components->error("Docker mode is on but compose service '{$service}' is not running. Bring the stack up with `docker compose up -d`.");
+
+                return false;
+            }
+
+            // The detached command runs node + claude + the session manager
+            // inside the service; a running but incomplete image would only
+            // fail once the session starts.
+            /** @var string $manager */
+            $manager = config('ralph.session.manager', 'screen');
+            $required = ['node', 'claude', $manager === 'tmux' ? 'tmux' : 'screen'];
+
+            foreach ($required as $binary) {
+                $result = Process::path(base_path())->run(sprintf(
+                    'docker compose exec -T %s sh -c %s',
+                    escapeshellarg($service),
+                    escapeshellarg("command -v {$binary}"),
+                ));
+
+                if (! $result->successful()) {
+                    $missing[] = $binary;
+                }
+            }
+
+            if ($missing !== []) {
+                $this->components->error("Missing required binaries in compose service '{$service}': ".implode(', ', $missing));
+
+                return false;
+            }
+
+            return true;
+        }
 
         foreach (['node', 'claude'] as $binary) {
             $result = Process::run("which {$binary}");
@@ -794,9 +920,13 @@ SUFFIX;
         }
 
         if (! $this->option('once')) {
-            $result = Process::run('which screen');
+            /** @var string $manager */
+            $manager = config('ralph.session.manager', 'screen');
+            $binary = $manager === 'tmux' ? 'tmux' : 'screen';
+
+            $result = Process::run("which {$binary}");
             if (! $result->successful()) {
-                $missing[] = 'screen';
+                $missing[] = $binary;
             }
         }
 
@@ -807,5 +937,21 @@ SUFFIX;
         }
 
         return true;
+    }
+
+    private function isDockerModeActive(): bool
+    {
+        /** @var bool|null $explicit */
+        $explicit = config('ralph.docker.enabled');
+
+        if ($explicit !== null) {
+            return (bool) $explicit;
+        }
+
+        if (file_exists('/.dockerenv')) {
+            return false;
+        }
+
+        return file_exists(base_path('docker-compose.yml'));
     }
 }

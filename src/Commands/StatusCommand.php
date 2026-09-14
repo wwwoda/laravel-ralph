@@ -4,7 +4,7 @@ namespace Woda\Ralph\Commands;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Console\Command;
-use Woda\Ralph\ScreenManager;
+use Woda\Ralph\Contracts\SessionManager;
 use Woda\Ralph\SessionTracker;
 
 class StatusCommand extends Command
@@ -15,7 +15,7 @@ class StatusCommand extends Command
 
     protected $description = 'List running ralph sessions';
 
-    public function handle(SessionTracker $tracker, ScreenManager $screenManager): int
+    public function handle(SessionTracker $tracker, SessionManager $sessionManager): int
     {
         if ($this->option('clean')) {
             $cleaned = $tracker->clean();
@@ -43,7 +43,7 @@ class StatusCommand extends Command
         $rows = [];
         foreach ($agents as $key => $agent) {
             $agentName = is_string($agent['name'] ?? null) ? $agent['name'] : (string) $key;
-            $running = $screenManager->isRunning($agentName);
+            $running = $sessionManager->isRunning($agentName);
             /** @var string $startedAtStr */
             $startedAtStr = $agent['started_at'] ?? 'now';
             $startedAt = CarbonImmutable::parse($startedAtStr);
@@ -70,7 +70,7 @@ class StatusCommand extends Command
         }
 
         $this->table(
-            ['Name', 'Status', 'Path', 'Session', 'Model', 'Duration', 'Screen'],
+            ['Name', 'Status', 'Path', 'SID', 'Model', 'Duration', 'Session'],
             $rows,
         );
 

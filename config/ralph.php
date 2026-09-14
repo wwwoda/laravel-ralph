@@ -30,6 +30,20 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Session manager
+    |--------------------------------------------------------------------------
+    |
+    | Which terminal multiplexer backs ralph's detached sessions.
+    | Supported: 'screen' (default — GNU screen) | 'tmux'.
+    |
+    */
+
+    'session' => [
+        'manager' => env('RALPH_SESSION_MANAGER', 'screen'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Screen Sessions
     |--------------------------------------------------------------------------
     */
@@ -37,6 +51,50 @@ return [
     'screen' => [
         'prefix' => 'ralph',
         'shell' => env('RALPH_SCREEN_SHELL', 'zsh'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Tmux Sessions
+    |--------------------------------------------------------------------------
+    |
+    | Only consulted when `session.manager` is 'tmux'. Standalone detached
+    | sessions are created (one per ralph session); shell selection is
+    | controlled by tmux's own `default-shell` setting.
+    |
+    */
+
+    'tmux' => [
+        'prefix' => 'ralph',
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Docker mode
+    |--------------------------------------------------------------------------
+    |
+    | When enabled, every shell invocation made by SessionManager (and any
+    | other CommandRunner consumer) is wrapped with `docker compose exec`,
+    | so ralph sessions live INSIDE the configured compose service rather
+    | than on the host. Use this when the project is Sail/compose-based
+    | and you want claude `--dangerously-skip-permissions` to be sandboxed
+    | to the container.
+    |
+    | enabled:
+    |   null  → auto-detect: ON when /.dockerenv is absent (we're on the host)
+    |           AND base_path() has a docker-compose.yml.
+    |   true  → force on. SessionManager exec's into the container.
+    |   false → force off. SessionManager runs on the host as before.
+    |
+    | service:     compose service name to exec into (default 'agent').
+    | working_dir: WORKDIR inside the container; passed as `-c` to tmux/screen.
+    |
+    */
+
+    'docker' => [
+        'enabled' => env('RALPH_DOCKER_ENABLED'),
+        'service' => env('RALPH_DOCKER_SERVICE', 'agent'),
+        'working_dir' => env('RALPH_DOCKER_WORKING_DIR', '/var/www/html'),
     ],
 
     /*

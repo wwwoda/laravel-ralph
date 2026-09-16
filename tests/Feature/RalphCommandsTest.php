@@ -129,20 +129,16 @@ test('ralph:init fails on invalid existing json', function () {
     File::deleteDirectory($claudeDir);
 });
 
-test('ralph:start --once skips docker validation and checks host binaries', function () {
+test('ralph:start --once checks container binaries when docker mode is enabled', function () {
     config()->set('ralph.docker.enabled', true);
-
     Process::fake([
-        'which node' => Process::result(exitCode: 1),
-        'which claude' => Process::result(exitCode: 1),
+        'which docker' => Process::result(exitCode: 1),
         '*' => Process::result(),
     ]);
-
     $this->artisan('ralph:start --once --prompt "test" test-session')
-        ->expectsOutputToContain('Missing required binaries: node, claude')
+        ->expectsOutputToContain('Missing required binaries: docker')
         ->assertExitCode(1);
-
-    Process::assertNotRan('which docker');
+    Process::assertNotRan('which claude');
 });
 
 test('ralph:start in docker mode fails when the service lacks node or claude', function () {

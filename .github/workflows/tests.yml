@@ -33,8 +33,12 @@ jobs:
           composer require "laravel/framework:${{ matrix.laravel }}" --no-interaction --no-update
           composer update --prefer-dist --no-interaction
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
       - name: Run tests
-        run: vendor/bin/pest
+        run: composer test
 
       - name: Run PHPStan
         run: vendor/bin/phpstan analyse

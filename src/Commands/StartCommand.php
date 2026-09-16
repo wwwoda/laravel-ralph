@@ -24,7 +24,11 @@ class StartCommand extends Command
         {--issue= : GitHub issue number to work on}
         {--prompt= : Path to prompt file or inline text}
         {--iterations= : Max iterations}
-        {--model= : Override Claude model}
+        {--agent= : Agent CLI (claude or codex)}
+        {--supervisor : Run a recurring host supervisor with bounded permissions}
+        {--interval=1200 : Seconds between supervisor turns}
+        {--prompt-file= : Required prompt file path}
+        {--model= : Override agent model}
         {--effort= : Override Claude effort level (low, medium, high, xhigh, max)}
         {--budget= : Max USD per Claude invocation}
         {--fresh : Each iteration starts a fresh Claude session}
@@ -67,12 +71,56 @@ SUFFIX;
 
     public function handle(SessionTracker $tracker, SessionManager $sessionManager, CommandRunner $runner): int
     {
+        if ($this->option('resume') && ! $this->option('fresh')) {
+            $name = $this->argument('name');
+            if (! is_string($name) || $tracker->get($name) === null) {
+                $this->components->error('Resume requires a tracked session name.');
+
+                return self::FAILURE;
+            }
+            $record = $tracker->get($name);
+            foreach (['agent', 'model', 'effort'] as $key) {
+                if ($this->option($key) !== null && $this->option($key) !== ($record[$key] ?? null)) {
+                    $this->components->error('Resume keeps the recorded agent, model and effort.');
+
+                    return self::FAILURE;
+                }
+            }
+            try {
+                $tracker->resume($name);
+            } catch (\RuntimeException $e) {
+                $this->components->error($e->getMessage());
+
+                return self::FAILURE;
+            }
+            $status = $tracker->state($tracker->get($name) ?? [])['status'] ?? 'waiting';
+            $status = is_string($status) ? $status : 'waiting';
+            $this->components->info("Session '{$name}' resumed with status '{$status}'.".($tracker->isRunning($name) ? '' : ' The watcher restarts it when its wait ends.'));
+
+            return self::SUCCESS;
+        }
         if ($this->option('fresh') && $this->option('resume')) {
             $this->components->error('--fresh and --resume are mutually exclusive.');
 
             return self::FAILURE;
         }
 
+        $agent = $this->resolveAgent();
+        if (! in_array($agent, ['claude', 'codex'], true)) {
+            $this->components->error('Agent must be claude or codex.');
+
+            return self::FAILURE;
+        }
+        if ($agent === 'codex' && $this->option('budget') !== null) {
+            $this->components->error('Codex does not support --budget.');
+
+            return self::FAILURE;
+        }
+        if ($this->option('supervisor') && (! $this->resolveModel() || ! $this->resolveEffort())) {
+            $this->components->error('Supervisor requires explicit model and effort.');
+
+            return self::FAILURE;
+        }
         $permissionMode = $this->resolvePermissionMode();
         if ($permissionMode === null) {
             return self::FAILURE;
@@ -88,10 +136,18 @@ SUFFIX;
             return self::FAILURE;
         }
 
-        $this->checkSandboxConfig();
+        if ($agent === 'claude') {
+            $this->checkSandboxConfig();
+        }
 
         // Resolve what to work on first (determines suggested name)
-        $promptSource = $this->resolvePromptSource();
+        try {
+            $promptSource = $this->resolvePromptSource();
+        } catch (\RuntimeException $e) {
+            $this->components->error($e->getMessage());
+
+            return self::FAILURE;
+        }
         $this->promptSource = $promptSource;
 
         // Name: explicit arg > suggested from prompt source > interactive
@@ -100,7 +156,11 @@ SUFFIX;
         // Write prompt file if needed, or use existing file
         $prompt = $promptSource['file'] ?? $this->writePromptFile($name, $promptSource['content']);
 
-        $sessionId = $this->resolveSessionId($tracker, $name);
+        if ($tracker->isRunning($name)) {
+            $this->components->error('Session is already running.');
+
+            return self::FAILURE;
+        }
 
         /** @var int $iterations */
         $iterations = $this->option('iterations') ?? config('ralph.loop.default_iterations');
@@ -114,7 +174,6 @@ SUFFIX;
         $logger = $this->createSessionLogger($name);
         $logger->info("Session: {$name}");
         $logger->info("Prompt source: {$promptSource['source']}");
-        $logger->info("Session ID: {$sessionId}");
         $logger->info("Iterations: {$iterations}");
         $logger->info('Model: '.($model ?? 'default'));
         $logger->info('Effort: '.($effort ?? 'default'));
@@ -126,9 +185,24 @@ SUFFIX;
         $configScriptPath = config('ralph.script_path');
         $scriptPath = $configScriptPath ?? dirname(__DIR__, 2).'/scripts/ralph-loop.cjs';
 
-        // Foreground (--once) mode runs on the host; use host paths verbatim.
+        if ($this->option('supervisor')) {
+            $runner = new \Woda\Ralph\NativeCommandRunner;
+            $sessionManager = new \Woda\Ralph\TmuxManager(prefix: 'ralph', runner: $runner);
+        }
+        $docker = $this->isDockerModeActive() && ! $this->option('supervisor');
+        /** @var string $logDirectory */
+        $logDirectory = config('ralph.logging.directory');
+        $statePath = $logDirectory.'/'.$name.'/state.json';
         if ($this->option('once')) {
-            $hostLoopCmd = $this->buildLoopCommand($scriptPath, $prompt, $name, $iterations, $sessionId, $logger->path(), $permissionMode);
+            File::ensureDirectoryExists(dirname($statePath));
+            File::delete($statePath.'.cancel');
+            File::replace($statePath, json_encode(['status' => 'waiting', 'attempts' => 0, 'failures' => 0,
+                'session_id' => null, 'next_attempt_at' => null], JSON_THROW_ON_ERROR));
+        }
+
+        // Foreground mode uses the same boundary as detached execution.
+        if ($this->option('once')) {
+            $hostLoopCmd = $this->buildLoopCommand($runner->translatePath($scriptPath), $runner->translatePath($prompt), $name, 1, $runner->translatePath($logger->path()), $permissionMode);
             $logger->debug("Loop command: {$hostLoopCmd}");
 
             $this->components->info("Running single iteration for '{$name}'...");
@@ -141,7 +215,12 @@ SUFFIX;
                 $process = $process->tty();
             }
 
-            $result = $process->run($hostLoopCmd);
+            if ($docker) {
+                $result = $runner->run($this->buildEnvExportString($runner).' && '.$hostLoopCmd, timeout: 86400);
+                $this->output->write($result->output().$result->errorOutput());
+            } else {
+                $result = $process->run($hostLoopCmd);
+            }
 
             return $result->exitCode() ?? self::FAILURE;
         }
@@ -150,18 +229,11 @@ SUFFIX;
         // SessionManager runs through the CommandRunner — under docker
         // mode that's `docker compose exec` into the agent service, so
         // every absolute path must point at its container-side equivalent.
-        if ($tracker->isRunning($name)) {
-            $this->components->error("Session '{$name}' is already running.");
-
-            return self::FAILURE;
-        }
-
         $loopCmd = $this->buildLoopCommand(
             $runner->translatePath($scriptPath),
             $runner->translatePath($prompt),
             $name,
             $iterations,
-            $sessionId,
             $runner->translatePath($logger->path()),
             $permissionMode,
         );
@@ -171,28 +243,44 @@ SUFFIX;
 
         $envExports = $this->buildEnvExportString($runner);
         $sessionWorkingDir = $runner->translatePath($workingDir);
-        $parts = array_filter(['unset CLAUDECODE', $envExports, "cd {$sessionWorkingDir}", $loopCmd]);
+        $parts = array_filter(['unset CLAUDECODE', $envExports, 'cd '.escapeshellarg((string) $sessionWorkingDir), $loopCmd]);
         $sessionCmd = implode(' && ', $parts);
 
-        $sessionManager->start($name, $sessionCmd, $workingDir);
+        /** @var string $managerName */
+        $managerName = $this->option('supervisor') ? 'tmux' : config('ralph.session.manager', 'screen');
+        try {
+            $tracker->start($name, [
+                'name' => $name,
+                'agent' => $agent,
+                'docker' => $docker,
+                'service' => config('ralph.docker.service', 'agent'),
+                'container_working_dir' => config('ralph.docker.working_dir', '/var/www/html'),
+                'manager' => $managerName,
+                'shell' => config('ralph.screen.shell', 'zsh'),
+                'prefix' => $this->option('supervisor') ? 'ralph' : config('ralph.'.$managerName.'.prefix', 'ralph'),
+                'launch_command' => $sessionCmd,
+                'state_path' => $statePath,
+                'auto_restart' => true,
+                'log_directory' => config('ralph.logging.directory'),
+                'prompt_source' => $promptSource['source'],
+                'working_path' => $workingDir,
+                'model' => $model,
+                'effort' => $effort,
+                'iterations' => $iterations,
+                'screen_name' => $sessionManager->fullName($name),
+            ]);
+        } catch (\RuntimeException $e) {
+            $this->components->error($e->getMessage());
 
-        $tracker->track($name, [
-            'name' => $name,
-            'prompt_source' => $promptSource['source'],
-            'working_path' => $workingDir,
-            'session_id' => $sessionId,
-            'model' => $model,
-            'effort' => $effort,
-            'iterations' => $iterations,
-            'screen_name' => $sessionManager->fullName($name),
-        ]);
+            return self::FAILURE;
+        }
 
         $this->components->info("Session '{$name}' started.");
         $this->components->bulletList([
             "Session: {$sessionManager->fullName($name)}",
             "Working dir: {$workingDir}",
             "Iterations: {$iterations}",
-            "Session ID: {$sessionId}",
+            "Agent: {$agent}",
         ]);
 
         if ($this->option('attach')) {
@@ -202,6 +290,13 @@ SUFFIX;
         }
 
         return self::SUCCESS;
+    }
+
+    private function resolveAgent(): string
+    {
+        $value = $this->option('agent') ?? config('ralph.loop.agent', 'claude');
+
+        return is_string($value) ? $value : '';
     }
 
     private function resolveName(?string $suggestedName): string
@@ -238,29 +333,20 @@ SUFFIX;
         return $name;
     }
 
-    private function resolveSessionId(SessionTracker $tracker, string $name): string
-    {
-        if ($this->option('resume')) {
-            $existing = $tracker->get($name);
-            $storedId = $existing['session_id'] ?? null;
-
-            if (is_string($storedId) && $storedId !== '') {
-                $this->components->info("Resuming session ID: {$storedId}");
-
-                return $storedId;
-            }
-
-            $this->components->warn("No stored session ID for '{$name}', starting fresh.");
-        }
-
-        return (string) Str::uuid();
-    }
-
     /**
      * @return array{content: string, suggested_name: ?string, source: string, file: ?string, suffix?: string, continuation?: string}
      */
     private function resolvePromptSource(): array
     {
+        $promptFile = $this->option('prompt-file');
+        if (is_string($promptFile)) {
+            $path = str_starts_with($promptFile, '/') ? $promptFile : base_path($promptFile);
+            if (! File::isFile($path)) {
+                throw new \RuntimeException('Prompt file does not exist.');
+            }
+
+            return ['content' => '', 'suggested_name' => null, 'source' => $path, 'file' => $path];
+        }
         // 1. Explicit --speckit flag
         $speckit = $this->option('speckit');
         if ($speckit !== null) {
@@ -286,13 +372,18 @@ SUFFIX;
         // 3. Explicit --prompt flag
         $prompt = $this->option('prompt');
         if (is_string($prompt) && $prompt !== '') {
-            if (File::exists($prompt)) {
+            $prompt = ! str_starts_with($prompt, '/') && File::isFile(base_path($prompt)) ? base_path($prompt) : $prompt;
+            if (File::isFile($prompt)) {
                 return [
                     'content' => '',
                     'suggested_name' => null,
                     'source' => $prompt,
                     'file' => $prompt,
                 ];
+            }
+
+            if (preg_match('~^(?:/|\./|storage/)|\.md$~', $prompt)) {
+                throw new \RuntimeException('Prompt file does not exist. Use --prompt-file for file inputs.');
             }
 
             return [
@@ -637,7 +728,7 @@ SUFFIX;
             }
         }
 
-        $fileRefs = implode("\n", array_map(fn (string $f): string => $this->fileRef($f), $files));
+        $fileRefs = implode("\n", array_map($this->fileRef(...), $files));
 
         $progressNote = $progressExists
             ? 'Read progress.md FIRST — `## Codebase Patterns` (top) captures conventions discovered in earlier iterations. Then read tasks.md.'
@@ -690,6 +781,9 @@ SUFFIX;
 
     private function resolvePermissionMode(): ?string
     {
+        if ($this->option('supervisor')) {
+            return 'auto';
+        }
         $mode = $this->option('permission-mode');
 
         if (! is_string($mode) || $mode === '') {
@@ -746,32 +840,48 @@ SUFFIX;
     {
         $effort = $this->resolveEffort();
 
-        if ($effort === null || in_array($effort, self::EFFORT_LEVELS, true)) {
+        $levels = $this->resolveAgent() === 'codex' ? [...self::EFFORT_LEVELS, 'ultra'] : self::EFFORT_LEVELS;
+        if ($effort === null || in_array($effort, $levels, true)) {
             return true;
         }
 
         $this->components->error(sprintf(
             "Unknown effort level '%s'. Expected one of: %s",
             $effort,
-            implode(', ', self::EFFORT_LEVELS),
+            implode(', ', $levels),
         ));
 
         return false;
     }
 
-    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $sessionId, string $logPath, string $permissionMode): string
+    private function buildLoopCommand(string $scriptPath, string $prompt, string $name, int $iterations, string $logPath, string $permissionMode): string
     {
         $cmd = sprintf(
-            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --session-id %s --log-path %s',
+            'node %s --prompt %s --name %s --iterations %d --permission-mode %s --log-path %s',
             escapeshellarg($scriptPath),
             escapeshellarg($prompt),
             escapeshellarg($name),
             $iterations,
             escapeshellarg($permissionMode),
-            escapeshellarg($sessionId),
             escapeshellarg($logPath),
         );
 
+        $cmd .= ' --agent '.escapeshellarg($this->resolveAgent());
+        /** @var string $logDirectory */
+        $logDirectory = config('ralph.logging.directory');
+        $statePath = $logDirectory.'/'.$name.'/state.json';
+        if ($this->isDockerModeActive() && ! $this->option('supervisor')) {
+            $statePath = app(CommandRunner::class)->translatePath($statePath);
+        }
+        $cmd .= ' --state-path '.escapeshellarg($statePath);
+        if ($this->option('resume')) {
+            $cmd .= ' --resume';
+        }
+        if ($this->option('supervisor')) {
+            /** @var string $interval */
+            $interval = $this->option('interval');
+            $cmd .= ' --supervisor --interval '.escapeshellarg($interval);
+        }
         $model = $this->resolveModel();
         if (is_string($model)) {
             $cmd .= ' --model '.escapeshellarg($model);
@@ -805,6 +915,8 @@ SUFFIX;
         $logDir = config('ralph.logging.directory', '');
         /** @var string $marker */
         $marker = config('ralph.loop.completion_marker', '');
+        /** @var string $blockedMarker */
+        $blockedMarker = config('ralph.loop.blocked_marker', '');
         /** @var string $continuation */
         $continuation = $this->promptSource['continuation'] ?? config('ralph.prompt.continuation', '');
         /** @var int $maxFailures */
@@ -816,6 +928,7 @@ SUFFIX;
             'AGENT_PROMPT_SUFFIX' => $suffix,
             'AGENT_LOG_DIR' => $logDir,
             'AGENT_COMPLETION_MARKER' => $marker,
+            'AGENT_BLOCKED_MARKER' => $blockedMarker,
             'AGENT_CONTINUATION_PROMPT' => $continuation,
             'AGENT_MAX_CONSECUTIVE_FAILURES' => (string) $maxFailures,
             'AGENT_NON_JSON_WARN_THRESHOLD' => (string) $nonJsonThreshold,
@@ -904,7 +1017,7 @@ SUFFIX;
     {
         // --once runs the loop on the host regardless of docker mode, so it
         // needs the host binaries, not the container.
-        $dockerMode = $this->isDockerModeActive() && ! $this->option('once');
+        $dockerMode = $this->isDockerModeActive() && ! $this->option('supervisor');
 
         $missing = [];
 
@@ -940,7 +1053,7 @@ SUFFIX;
             // fail once the session starts.
             /** @var string $manager */
             $manager = config('ralph.session.manager', 'screen');
-            $required = ['node', 'claude', $manager === 'tmux' ? 'tmux' : 'screen'];
+            $required = ['node', $this->resolveAgent(), $manager === 'tmux' ? 'tmux' : 'screen'];
 
             foreach ($required as $binary) {
                 $result = Process::path(base_path())->run(sprintf(
@@ -963,7 +1076,7 @@ SUFFIX;
             return true;
         }
 
-        foreach (['node', 'claude'] as $binary) {
+        foreach (['node', $this->resolveAgent()] as $binary) {
             $result = Process::run("which {$binary}");
             if (! $result->successful()) {
                 $missing[] = $binary;

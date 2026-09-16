@@ -144,6 +144,8 @@ class RalphServiceProvider extends ServiceProvider
             $this->commands([
                 InitCommand::class,
                 StartCommand::class,
+                \Woda\Ralph\Commands\WatchCommand::class,
+                \Woda\Ralph\Commands\WatchInstallCommand::class,
                 StatusCommand::class,
                 AttachCommand::class,
                 KillCommand::class,

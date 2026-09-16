@@ -50,7 +50,7 @@ class KillCommand extends Command
             }
         }
 
-        $sessionManager->kill($session);
+        $tracker->cancel($session);
         $tracker->untrack($session);
 
         $this->components->info("Session '{$session}' killed.");
@@ -78,7 +78,7 @@ class KillCommand extends Command
 
         foreach ($agents as $key => $agent) {
             $agentName = is_string($agent['name'] ?? null) ? $agent['name'] : (string) $key;
-            $sessionManager->kill($agentName);
+            $tracker->cancel((string) $key);
             $tracker->untrack((string) $key);
             $this->components->info("Killed '{$key}'.");
         }

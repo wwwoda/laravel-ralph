@@ -35,6 +35,11 @@ class StatusCommand extends Command
         }
 
         if ($this->option('json')) {
+            foreach ($agents as &$record) {
+                $record['runtime'] = $tracker->state($record);
+                unset($record['launch_command']);
+            }
+            unset($record);
             $this->line((string) json_encode($agents, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
 
             return self::SUCCESS;
@@ -43,7 +48,8 @@ class StatusCommand extends Command
         $rows = [];
         foreach ($agents as $key => $agent) {
             $agentName = is_string($agent['name'] ?? null) ? $agent['name'] : (string) $key;
-            $running = $sessionManager->isRunning($agentName);
+            $running = $tracker->managerFor($agent)->isRunning($agentName);
+            $state = $tracker->state($agent);
             /** @var string $startedAtStr */
             $startedAtStr = $agent['started_at'] ?? 'now';
             $startedAt = CarbonImmutable::parse($startedAtStr);
@@ -51,8 +57,8 @@ class StatusCommand extends Command
 
             /** @var string $workingPath */
             $workingPath = $agent['working_path'] ?? '-';
-            /** @var string $sessionId */
-            $sessionId = $agent['session_id'] ?? '-';
+            $sessionId = $state['session_id'] ?? $agent['session_id'] ?? '-';
+            $sessionId = is_string($sessionId) ? $sessionId : '-';
             /** @var string $model */
             $model = $agent['model'] ?? 'default';
             /** @var string $effort */
@@ -62,7 +68,8 @@ class StatusCommand extends Command
 
             $rows[] = [
                 $key,
-                $running ? '<fg=green>running</>' : '<fg=red>stopped</>',
+                ! $running && ($state['status'] ?? null) === 'running' ? 'interrupted' : ($state['status'] ?? ($running ? 'running' : 'stopped')),
+                $agent['agent'] ?? 'claude',
                 $workingPath,
                 strlen($sessionId) > 8 ? substr($sessionId, 0, 8) : $sessionId,
                 $model,
@@ -73,7 +80,7 @@ class StatusCommand extends Command
         }
 
         $this->table(
-            ['Name', 'Status', 'Path', 'SID', 'Model', 'Effort', 'Duration', 'Session'],
+            ['Name', 'Status', 'Agent', 'Path', 'SID', 'Model', 'Effort', 'Duration', 'Session'],
             $rows,
         );
 

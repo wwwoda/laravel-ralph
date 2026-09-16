@@ -39,6 +39,7 @@ class AttachCommand extends Command
             }
         }
 
+        $sessionManager = $tracker->managerFor($tracker->get($session) ?? []);
         if (! $sessionManager->isRunning($session)) {
             $this->components->error("Session '{$session}' is not running.");
 

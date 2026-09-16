@@ -1,7 +1,13 @@
 {
     "name": "woda/laravel-ralph",
-    "description": "Claude Code agent loop runner for Laravel",
-    "keywords": ["laravel", "claude", "agent", "loop"],
+    "description": "Durable Claude Code and Codex agent loops for Laravel",
+    "keywords": [
+        "laravel",
+        "claude",
+        "agent",
+        "loop",
+        "codex"
+    ],
     "homepage": "https://github.com/wwwoda/laravel-ralph",
     "type": "library",
     "license": "MIT",
@@ -40,7 +46,10 @@
         }
     },
     "scripts": {
-        "test": "vendor/bin/pest",
+        "test": [
+            "vendor/bin/pest",
+            "@test:node"
+        ],
         "phpstan": "vendor/bin/phpstan analyse",
         "cs-fix": "vendor/bin/pint",
         "cs-check": "vendor/bin/pint --test",
@@ -52,7 +61,8 @@
             "@phpstan",
             "@rector-check",
             "@phpcpd"
-        ]
+        ],
+        "test:node": "node --test tests/Node/*.test.cjs"
     },
     "extra": {
         "laravel": {

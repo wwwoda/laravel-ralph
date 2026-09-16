@@ -8,11 +8,14 @@ return [
     */
 
     'loop' => [
+        'agent' => env('RALPH_AGENT', 'claude'),
         'default_iterations' => (int) env('RALPH_LOOP_ITERATIONS', 30),
         'permission_mode' => env('RALPH_PERMISSION_MODE', 'acceptEdits'),
         'model' => env('RALPH_MODEL'),
         'effort' => env('RALPH_EFFORT'),
         'completion_marker' => '<promise>COMPLETE</promise>',
+        // Final line an agent prints when a human must act; ends the run without retries.
+        'blocked_marker' => '<promise>BLOCKED</promise>',
         'max_consecutive_failures' => (int) env('RALPH_MAX_CONSECUTIVE_FAILURES', 3),
     ],
 

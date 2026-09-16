@@ -3,6 +3,7 @@
 namespace Woda\Ralph;
 
 use Illuminate\Contracts\Process\ProcessResult;
+use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Process;
 use Woda\Ralph\Contracts\CommandRunner;
 
@@ -29,7 +30,7 @@ class DockerCommandRunner implements CommandRunner
 
         // `docker compose exec` runs from the project dir (where compose.yml lives).
         if ($this->composeProjectPath !== null) {
-            $process = $process->path($this->composeProjectPath);
+            $process = $process->path($this->composeProjectPath)->env($this->clearedEnvironment());
         }
 
         $wrapped = sprintf(
@@ -40,6 +41,19 @@ class DockerCommandRunner implements CommandRunner
         );
 
         return $process->run($wrapped);
+    }
+
+    /** @return array<string, false> */
+    private function clearedEnvironment(): array
+    {
+        $keys = ['COMPOSE_PROJECT_NAME', 'COMPOSE_FILE', 'COMPOSE_PROFILES'];
+        $file = $this->composeProjectPath.'/.env';
+        if (File::exists($file)) {
+            preg_match_all('/^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/m', File::get($file), $matches);
+            $keys = [...$keys, ...$matches[1]];
+        }
+
+        return array_fill_keys($keys, false);
     }
 
     public function buildInteractive(string $command): string
